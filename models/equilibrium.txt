@@ -1,0 +1,11 @@
+% components
+A* = 10
+B* = 8
+C* = 0
+
+kf = 0.5
+kr = 0.2
+
+A' = -kf*A*B + kr*C
+B' = -kf*A*B + kr*C
+C' = kf*A*B - kr*C

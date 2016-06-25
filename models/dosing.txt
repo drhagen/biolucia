@@ -1,0 +1,13 @@
+% components
+A* = 0
+B* = 0
+
+ka = 0.5
+kb = 0.2
+
+A' = -ka*A
+B' = -kb*B
+
+A(2) = 5
+A(3) += 2
+B(4) = A
