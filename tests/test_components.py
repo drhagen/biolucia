@@ -83,9 +83,9 @@ def equilibrium_model():
     m = Model()
     m = m.add(Constant('A0', 10))
     m = m.add(Constant('B0', 5))
-    m = m.add(State('A', Initial(ex('A0')), [], ODE(PiecewiseAnalytic([AnalyticSegment(0, inf, ex('kr*C-kf*A*B'))]))))
-    m = m.add(State('B', Initial(ex('B0')), [], ODE(PiecewiseAnalytic([AnalyticSegment(0, inf, ex('kr*C-kf*A*B'))]))))
-    m = m.add(State('C', Initial(ex('0')), [], ODE(PiecewiseAnalytic([AnalyticSegment(0, inf, ex('kf*A*B-kr*C'))]))))
+    m = m.add(State('A', Initial(ex('A0')), [], Ode(PiecewiseAnalytic([AnalyticSegment(0, inf, ex('kr*C-kf*A*B'))]))))
+    m = m.add(State('B', Initial(ex('B0')), [], Ode(PiecewiseAnalytic([AnalyticSegment(0, inf, ex('kr*C-kf*A*B'))]))))
+    m = m.add(State('C', Initial(ex('0')), [], Ode(PiecewiseAnalytic([AnalyticSegment(0, inf, ex('kf*A*B-kr*C'))]))))
     m = m.add(Constant('kf', 0.5))
     m = m.add(Constant('kr', 0.2))
 

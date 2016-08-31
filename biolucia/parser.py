@@ -1,11 +1,11 @@
-from biolucia.model import (Model, Constant, Rule, Initial, ODE, State, Dose, Event, Effect, EventDirection,
+from biolucia.model import (Model, Constant, Rule, Initial, Ode, State, Dose, Event, Effect, EventDirection,
                             AnalyticSegment)
 
 from funcparserlib.lexer import make_tokenizer
 from funcparserlib.parser import (some, maybe, many, finished, skip,
                                   forward_decl, NoParseError, Parser)
 from re import VERBOSE
-import aenum
+from enum import Enum
 from numpy import inf
 import sympy as sp
 from functools import reduce
@@ -175,7 +175,7 @@ def make_ode(matches):
         additive = True
     else:
         additive = False
-    return name, ODE(AnalyticSegment(first, last, expr), additive)
+    return name, Ode(AnalyticSegment(first, last, expr), additive)
 ode = symbol + maybe(time_range) + op_("'") + (op('=') | op('+=')) + expression >> make_ode
 
 
@@ -229,12 +229,11 @@ def read_model(filename):
             # Keep only non-blank lines
             token_lines.append(tokens_line)
 
-    class Section(aenum.AutoNumberEnum):
-        options = ()
-        components = ()
+    class Section(Enum):
+        options = object()
+        components = object()
 
     active_section = Section.components
-
 
     components = []
 
@@ -313,7 +312,7 @@ def collapse_components(components):
                         raise ValueError('Initial {name} is mentioned multiple times'.format(name=name))
                 else:
                     additive_initials.append(element)
-            elif isinstance(element, ODE):
+            elif isinstance(element, Ode):
                 if not element.additive:
                     if non_additive_ode is None:
                         non_additive_ode = element
@@ -323,7 +322,7 @@ def collapse_components(components):
                             raise ValueError('ODE {name} is mentioned multiple times'.format(name=name))
                         else:
                             combined_expr = non_additive_ode.value + element.value
-                            non_additive_ode = ODE(combined_expr)
+                            non_additive_ode = Ode(combined_expr)
                 else:
                     additive_odes.append(element)
             elif isinstance(element, Dose):

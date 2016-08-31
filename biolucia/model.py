@@ -1,5 +1,4 @@
-from biolucia.base import Experiment
-from enum import Enum, unique
+from enum import Enum
 from typing import Sequence, Tuple, Union, Dict, List
 from sympy import Expr, Piecewise, Symbol, lambdify, And
 from numpy import inf, nan, array
@@ -242,10 +241,9 @@ class Effect:
     __repr__ = __str__
 
 
-@unique
 class EventDirection(Enum):
-    up = 1
-    down = 2
+    up = object()
+    down = object()
 
 
 class Event:
@@ -306,16 +304,16 @@ class Dose:
         return "({time}) = {value}".format(time=self.time, value=self.value)
 
 
-class ODE:
+class Ode:
     def __init__(self, value: Union[PiecewiseAnalytic, AnalyticSegment, Expr, Real, str], additive: bool = False):
         self.value = PiecewiseAnalytic.convert(value)
         self.additive = additive
 
     def subs(self, components: Sequence[Union['Rule', 'Constant']]):
         replacers = [(rule.name, rule.value) for rule in components]
-        return ODE(self.value.subs(replacers), self.additive)
+        return Ode(self.value.subs(replacers), self.additive)
 
-    def has_overlap(self, other: 'ODE'):
+    def has_overlap(self, other: 'Ode'):
         if isinstance(other, Constant):
             return True
         else:
@@ -419,7 +417,7 @@ class Rule(Component):
 
 
 class State(Component):
-    def __init__(self, name: Union[Symbol, str], initial: Initial, doses: Sequence[Dose], ode: ODE):
+    def __init__(self, name: Union[Symbol, str], initial: Initial, doses: Sequence[Dose], ode: Ode):
         super().__init__(name)
         self.initial = initial
         self.doses = doses
@@ -434,7 +432,7 @@ class State(Component):
     def add_dose(self, dose):
         return self.copy(doses=self.doses + (dose,))
 
-    def copy(self, name: str = None, initial: Initial = None, doses: Sequence[Dose] = None, ode: ODE = None):
+    def copy(self, name: str = None, initial: Initial = None, doses: Sequence[Dose] = None, ode: Ode = None):
         if name is None:
             name = self.name
 
@@ -493,6 +491,14 @@ class Model:
         return self.copy(parts=self.parts + tuple(ready_parts) + parsed_parts,
                          events=self.events + tuple(ready_events) + parsed_events)
 
+    def __getitem__(self, name: Union[Symbol, str]):
+        if isinstance(name, str):
+            name = Symbol(name)
+
+        name_map = dict((part.name, part) for part in self.parts)
+
+        return name_map[name]
+
     def update(self, variant: 'Model'):
         if not variant.parts and not variant.events:  # Don't update if there is nothing to update
             return self
@@ -528,7 +534,7 @@ class Model:
                     if new_part.ode is None:
                         new_ode = old_part.ode
                     elif new_part.ode.additive:
-                        new_ode = ODE(old_part.ode.value + new_part.ode.value,
+                        new_ode = Ode(old_part.ode.value + new_part.ode.value,
                                       old_part.initial.additive)
                     else:
                         new_ode = new_part.ode
@@ -646,7 +652,7 @@ class Model:
         return IntegrableSystem(n_parameters, n_states, parameter_values, initials_function, ode_function,
                                 jacobian_function, discontinuities, dose_functions, dose_times, output_functions)
 
-    def simulate(self, experiment: Experiment = None):
+    def simulate(self, experiment: 'Experiment' = None):
         from biolucia.experiment import InitialValueExperiment
         experiment = InitialValueExperiment() if experiment is None else experiment
         return experiment._simulate(self)

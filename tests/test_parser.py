@@ -19,7 +19,7 @@ class ParserTestCase(unittest.TestCase):
         self.assertEqual(d, (Symbol('d'), Dose(1.2, 'dose ** 2')))
 
         e = parse_all(ode, "e' = (s) + x * r")
-        self.assertEqual(e, (Symbol('e'), ODE('s + r*x')))
+        self.assertEqual(e, (Symbol('e'), Ode('s + r*x')))
         ee = parse_all(ode, "e' = ((s) + (x * r))")
         self.assertEqual(e, ee)
 
@@ -33,7 +33,7 @@ class ParserTestCase(unittest.TestCase):
         self.assertEqual(g, f)
 
         h = parse_all(ode, "e' = 0")
-        self.assertEqual(h, (Symbol('e'), ODE('0')))
+        self.assertEqual(h, (Symbol('e'), Ode('0')))
 
         i = parse_all(initial, "e* = 1.2")
         self.assertEqual(i, (Symbol('e'), Initial(1.2)))
@@ -45,4 +45,4 @@ class ParserTestCase(unittest.TestCase):
         self.assertEqual(k, (Symbol('k'), Rule('k', AnalyticSegment(1, 10, 'z*2'))))
 
         l = parse_all(ode, "l(1 < t < 10)' = cos(t)")
-        self.assertEqual(l, (Symbol('l'), ODE(AnalyticSegment(1, 10, 'cos(t)'))))
+        self.assertEqual(l, (Symbol('l'), Ode(AnalyticSegment(1, 10, 'cos(t)'))))
