@@ -39,6 +39,7 @@ def token_phase(characters: str):
         ('grouping', (r'[\(\)\[\]\{\}]',)),
         ('operator', (r'[~!@#$%^&*<>:?/\\|\-\+=]+',)),
         ('prime', (r"'",)),
+        ('comma', (r",",)),
     ]
 
     useless = ['comment', 'space']
@@ -62,10 +63,14 @@ symbol = some(lambda x: x.type == 'name') >> (lambda name: sp.Symbol(name.value)
 
 
 def make_function(matches):
+    func_name = str(matches[0])
     arguments = matches[1]
     combined = [] if arguments is None else [arguments[0]] + arguments[1]
-    function = sp.__dict__[str(matches[0])]
-    return function(*combined)
+    if func_name in sp.__dict__:
+        func_handle = sp.__dict__[str(matches[0])]
+    else:
+        raise ValueError('Function "{}" not found. Only functions in sympy.* may be used.'.format(func_name))
+    return func_handle(*combined)
 function = symbol + op_('(') + maybe(expression + many(op_(',') + expression)) + op_(')') >> make_function
 
 
@@ -216,9 +221,12 @@ component = constant | rule | initial | ode | dose | event
 
 
 def read_model(filename):
-    # Slurp file
     with open(filename) as file:
-        character_lines = file.read().splitlines()
+        return parse_model(file.read())
+
+
+def parse_model(text):
+    character_lines = text.splitlines()
 
     # Tokenize
     token_lines = []
@@ -274,12 +282,16 @@ def collapse_components(components):
     parts = []
     events = []
 
-    # Group components by name
+    # Group components by type and name
     component_groups = OrderedDict()  # It is nice to keep the order of the components
-    for name, element in components:
-        if name not in component_groups:
-            component_groups[name] = []
-        component_groups[name].append(element)
+    for component in components:
+        if isinstance(component, Event):
+            events.append(component)
+        else:
+            name, element = component
+            if name not in component_groups:
+                component_groups[name] = []
+            component_groups[name].append(element)
 
     # Separate the elements into different classes, ensuring that only compatible elements are defined
     for name, elements in component_groups.items():

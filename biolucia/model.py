@@ -1,6 +1,8 @@
-from enum import Enum
+import enum
 from typing import Sequence, Tuple, Union, Dict, List
+
 from sympy import Expr, Piecewise, Symbol, lambdify, And
+import numpy as np
 from numpy import inf, nan, array
 from itertools import permutations
 from sympy.utilities.iterables import topological_sort
@@ -232,6 +234,10 @@ class Effect:
         self.target = target
         self.value = PiecewiseAnalytic.convert(value)
 
+    def subs(self, components: Sequence[Union['Rule', 'Constant']]):
+        replacers = [(component.name, component.evaluate(0)) for component in components]
+        return Effect(self.target, self.value.subs(replacers))
+
     def __eq__(self, other):
         return self.target == other.target and self.value == other.value
 
@@ -241,9 +247,9 @@ class Effect:
     __repr__ = __str__
 
 
-class EventDirection(Enum):
-    up = object()
-    down = object()
+class EventDirection(enum.IntEnum):
+    up = +1
+    down = -1
 
 
 class Event:
@@ -253,6 +259,12 @@ class Event:
         self.direction = direction
         self.include_jumps = include_jumps
         self.effects = effects
+
+    def subs(self, components: Sequence[Union['Rule', 'Constant']]):
+        replacers = [(component.name, component.evaluate(0)) for component in components]
+        new_trigger = self.trigger.subs(replacers)
+        new_effects = [effect.subs(components) for effect in self.effects]
+        return Event(new_trigger, self.direction, self.include_jumps, new_effects)
 
     def __eq__(self, other):
         return self.trigger == other.trigger and self.direction == other.direction \
@@ -457,8 +469,8 @@ class State(Component):
 
 class Model:
     def __init__(self, parts: Sequence[Component] = (), events: Sequence[Event] = ()):
-        parts = tuple(parts)
-        events = tuple(events)
+        parts = tuple(parts) # type: Sequence[Component]
+        events = tuple(events) # type: Sequence[Event]
 
         self.parts = parts
         self.events = events
@@ -577,6 +589,8 @@ class Model:
                 state_indexes.append(i)
                 states.append(part)
 
+        events = self.events
+
         # Substitute constants and rules into rules
         rules = Rule.topological_sort(rules)
         for i in range(len(rules)):
@@ -586,6 +600,9 @@ class Model:
         # Substitute constants and rules into odes
         states = tuple(state.subs(inactive_constants) for state in states)
         states = tuple(state.subs(rules) for state in states)
+
+        events = tuple(event.subs(inactive_constants) for event in events)
+        events = tuple(event.subs(rules) for event in events)
 
         # Replace symbols
         n_parameters = len(parameters)
@@ -630,6 +647,21 @@ class Model:
         # Dose times
         dose_times = tuple(sorted(dose_groups.keys()))  # sorted distinct
 
+        # Build event functions
+        event_function = tuple(lambdify(all_parameters, event.trigger) for event in events)
+
+        directions = np.asarray(tuple(event.direction.value for event in events))
+
+        effect_groups = []
+        for event in events:
+            effect_group = [state.name for state in states]
+            for effect in event.effects:
+                # TODO (drhagen): handle rare case of duplicate targets with additive effect
+                i_target = state_names.index(effect.target)
+                effect_group[i_target] = effect.value
+            effect_groups.append(effect_group)
+        effect_function = tuple(lambdify(all_parameters, effect) for effect in effect_groups)
+
         # Build output functions
         # TODO (drhagen): handle the discontinuities
         output_functions = dict()
@@ -650,7 +682,8 @@ class Model:
             output_functions.update({i: func, part.name: func, str(part.name): func})
 
         return IntegrableSystem(n_parameters, n_states, parameter_values, initials_function, ode_function,
-                                jacobian_function, discontinuities, dose_functions, dose_times, output_functions)
+                                jacobian_function, discontinuities, dose_functions, dose_times, event_function,
+                                directions, effect_function, output_functions)
 
     def simulate(self, experiment: 'Experiment' = None):
         from biolucia.experiment import InitialValueExperiment

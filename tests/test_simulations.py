@@ -44,3 +44,22 @@ class SimulateTestCase(unittest.TestCase):
         self.assertEqual(sim.matrix_values(1, 'A'), 2.0)
         self.assertEqual(sim.matrix_values(1.5, 'A'), 2.0)
         self.assertEqual(sim.matrix_values(2, 'A'), 3.0)
+
+    def test_events(self):
+        m = Model()
+        m = m.add("A* = 0", "A' = 1", "@(A > 1) A = 0")
+
+        sim = m.simulate()
+
+        self.assertTrue(0.9 < sim.matrix_values(0.95, 'A') < 1)
+        self.assertTrue(0 < sim.matrix_values(1.05, 'A') < 0.1)
+        self.assertTrue(0.9 < sim.matrix_values(1.95, 'A') < 1)
+        self.assertTrue(0 < sim.matrix_values(2.05, 'A') < 0.1)
+
+    def test_empty(self):
+        m = Model()
+
+        sim = m.simulate()
+
+        self.assertEqual(sim.matrix_values(10).shape, (0,))
+        self.assertEqual(sim.matrix_values([10, 20]).shape, (2, 0))

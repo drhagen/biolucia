@@ -15,6 +15,9 @@ class ParserTestCase(unittest.TestCase):
         c = parse_all(initial, 'c* = sin(x)')
         self.assertEqual(c, (Symbol('c'), Initial('sin(x)')))
 
+        c = parse_all(initial, 'c* = atan2(x, y)')
+        self.assertEqual(c, (Symbol('c'), Initial('atan2(x, y)')))
+
         d = parse_all(dose, 'd(1.2) = dose ^ 2')
         self.assertEqual(d, (Symbol('d'), Dose(1.2, 'dose ** 2')))
 
@@ -25,6 +28,9 @@ class ParserTestCase(unittest.TestCase):
 
         f = parse_all(event, '@(A < 2) A += 10')
         self.assertEqual(f, Event('A - 2', EventDirection.down, True, [Effect('A', 'A + 10')]))
+
+        f = parse_all(event, '@(A < 2) A += 10, B += 2')
+        self.assertEqual(f, Event('A - 2', EventDirection.down, True, [Effect('A', 'A + 10'), Effect('B', 'B + 2')]))
 
         f = parse_all(event, '@(A > B) A = B - 2')
         self.assertEqual(f, Event('A - B', EventDirection.up, True, [Effect('A', 'B - 2')]))
@@ -46,3 +52,21 @@ class ParserTestCase(unittest.TestCase):
 
         l = parse_all(ode, "l(1 < t < 10)' = cos(t)")
         self.assertEqual(l, (Symbol('l'), Ode(AnalyticSegment(1, 10, 'cos(t)'))))
+
+    def test_combined_components(self):
+        a = parse_model('%components')
+        self.assertEqual(len(a.parts), 0)
+        self.assertEqual(len(a.events), 0)
+
+        a = parse_model('')
+        self.assertEqual(len(a.parts), 0)
+        self.assertEqual(len(a.events), 0)
+
+        a = parse_model("%components\nA' = -k\nA* = 10\nk = 0.2")
+        self.assertEqual(len(a.parts), 2)
+        self.assertEqual(len(a.events), 0)
+
+        a = parse_model("%components\nA' = -k\nA* = 10\nk = 0.2\n@(A < 2) A += 1")
+        self.assertEqual(len(a.parts), 2)
+        self.assertEqual(len(a.events), 1)
+

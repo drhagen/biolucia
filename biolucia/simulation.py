@@ -71,8 +71,12 @@ class BioluciaSystemSimulation(Simulation):
             states = self.solution(when)
             return output_fun(which, when, states)
         elif isinstance(which, str):
-            return np.fromiter((output_fun(which, when_i, self.solution(when_i)) for when_i in when),
-                               'float', count=len(when))
+            # when is a sequence
+            states = self.solution(when)
+            outputs = np.zeros((len(when),))
+            for i_when in range(len(when)):
+                outputs[i_when] = output_fun(which, when[i_when], states[i_when])
+            return outputs
         elif isinstance(when, Real):
             states = self.solution(when)
             return np.fromiter((output_fun(which_i, when, states) for which_i in which),
