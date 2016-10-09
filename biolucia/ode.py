@@ -3,15 +3,13 @@ from numbers import Real
 
 import numpy as np
 from numpy import concatenate, inf
-from scipy_ode import Radau, SolverStatus
-from scipy_ode.ivp import get_active_events, solve_event_equation
-
-from .helpers import eps
+from scipy_ode import Radau
+from scipy_ode.ivp import find_active_events, solve_event_equation
 
 
 class IntegrableSystem:
     """Class that stores parameter values and wraps ODE functions"""
-    def __init__(self, n_parameters, n_states, parameters, ics, odes, jacobian, discontinuities, doses, dose_times,
+    def __init__(self, n_parameters: int, n_states: int, parameters, ics, odes, jacobian, discontinuities, doses, dose_times,
                  events, directions, effects, outputs):
         self.n_parameters = n_parameters
         self.n_states = n_states
@@ -64,86 +62,67 @@ class LazyIntegrableSolution:
         else:
             y0 = system.ics()
 
-        self.solver = Radau(system.odes, y0, 0.0, self.next_discontinuity(short=True), jac=system.jacobian)
+        self.solver = Radau(system.odes, 0.0, y0, self.next_discontinuity(short=True), jac=system.jacobian)
 
-        # TODO: deconstruct state and write our own interpolator unless we give users choice of solver???
-        self.states = [[self.solver.state]]
-        self.solutions = [self.solver.interpolator(self.states[-1])]
+        self.solutions = []
         self.last_event_value = np.asarray([event(0.0, y0) for event in system.events])
 
     def integrate_to(self, requested_time):
-        if requested_time > self.final_time:
-            while requested_time > self.final_time:
-                # Advance the solver
-                if self.solver.status == SolverStatus.running or self.solver.status == SolverStatus.started:
-                    # Take step with existing solver
-                    self.solver.step()
+        while requested_time > self.solver.t:
+            # Advance the solver
+            if self.solver.status == 'running':  #or self.solver.status == 'started':
+                # Take step with existing solver
+                self.solver.step()
 
-                    # Die immediately if solver failed
-                    if self.solver.status == SolverStatus.failed:
-                        raise IntegrationFailureException(self.solver.state.t)
+                # Die immediately if solver failed
+                if self.solver.status == 'failed':
+                    raise IntegrationFailureException(self.solver.t)
 
-                    # Save state fom successful step
-                    last_time = self.states[-1][-1].t
-                    this_time = self.solver.state.t
-                    self.states[-1].append(self.solver.state)
+                # Save state fom successful step
+                last_time = self.solver.t_old
+                this_time = self.solver.t
+                this_state = self.solver.y
+                self.solutions.append(self.solver.dense_output())
 
-                    # Detect events
-                    last_event_value = self.last_event_value
-                    this_event_value = np.asarray([event(self.solver.state.t, self.solver.state.y)
-                                                   for event in self.system.events])
-                    self.last_event_value = this_event_value
+                # Detect events
+                last_event_value = self.last_event_value
+                this_event_value = np.asarray([event(this_time, this_state)
+                                               for event in self.system.events])
+                self.last_event_value = this_event_value
 
-                    i_active_events = get_active_events(last_event_value, this_event_value, self.system.directions)
-                    if i_active_events.size > 0:
-                        sol = self.solver.interpolator(self.states[-1][-2:])
-                        # Assume that there is a maximum of one root per event per step
-                        roots = [solve_event_equation(self.system.events[i_event], sol, last_time, this_time)
-                                 for i_event in i_active_events]
-                        i_first_active = np.argmin(roots)
-                        t_first_active = roots[i_first_active]
-                        i_event = i_active_events[i_first_active]
+                i_active_events = find_active_events(last_event_value, this_event_value, self.system.directions)
+                if i_active_events.size > 0:
+                    sol = self.solutions[-1]
+                    # Assume that there is a maximum of one root per event per step
+                    roots = [solve_event_equation(self.system.events[i_event], sol, last_time, this_time)
+                             for i_event in i_active_events]
+                    i_first_active = np.argmin(roots)
+                    t_first_active = roots[i_first_active]
+                    i_event = i_active_events[i_first_active]
 
-                        y0 = self.system.effects[i_event](t_first_active, sol(t_first_active))
-
-                        # Initialize a new solver
-                        self.solver = Radau(self.system.odes, y0, t_first_active,
-                                            self.next_discontinuity(short=True), jac=self.system.jacobian)
-
-                        self.solutions[-1] = self.solver.interpolator(self.states[-1])
-                        self.states.append([self.solver.state])
-                        self.solutions.append(None)
-                elif self.solver.status == SolverStatus.finished:
-                    # Reached a discontinuity, apply doses and initialize a new solver
-
-                    # Replace last solution with final solution
-                    self.solutions[-1] = self.solver.interpolator(self.states[-1])
-
-                    current_discontinuity = self.next_discontinuity()
-                    self.i_next_discontinuity += 1
-
-                    # Handle doses
-                    if current_discontinuity == self.next_dose():
-                        y0 = self.system.doses(current_discontinuity, self.solver.state.y)
-                        self.i_next_dose += 1
-                    else:
-                        y0 = self.solver.state.y
+                    y0 = self.system.effects[i_event](t_first_active, sol(t_first_active))
 
                     # Initialize a new solver
-                    self.solver = Radau(self.system.odes, y0, current_discontinuity,
+                    self.solver = Radau(self.system.odes, t_first_active, y0,
                                         self.next_discontinuity(short=True), jac=self.system.jacobian)
+            elif self.solver.status == 'finished':
+                # Reached a discontinuity, apply doses and initialize a new solver
 
-                    self.states.append([self.solver.state])
-                    self.solutions.append(None)
+                current_discontinuity = self.next_discontinuity()
+                self.i_next_discontinuity += 1
+
+                # Handle doses
+                if current_discontinuity == self.next_dose():
+                    y0 = self.system.doses(current_discontinuity, self.solver.y)
+                    self.i_next_dose += 1
                 else:
-                    raise IntegrationFailureException(self.solver.state.t)
+                    y0 = self.solver.y
 
-            # Update the interpolator for the final segment
-            self.solutions[-1] = self.solver.interpolator(self.states[-1])
-
-    @property
-    def final_time(self):
-        return self.states[-1][-1].t
+                # Initialize a new solver
+                self.solver = Radau(self.system.odes, current_discontinuity, y0,
+                                    self.next_discontinuity(short=True), jac=self.system.jacobian)
+            else:
+                raise IntegrationFailureException(self.solver.t)
 
     def next_discontinuity(self, short=False):
         next_discontinuity = self.all_discontinuities[self.i_next_discontinuity]
@@ -152,7 +131,7 @@ class LazyIntegrableSolution:
             if next_discontinuity == inf:
                 return next_discontinuity
             else:
-                return next_discontinuity - 16 * eps * next_discontinuity
+                return np.nextafter(next_discontinuity, -np.inf)
         else:
             return next_discontinuity
 
@@ -166,15 +145,23 @@ class LazyIntegrableSolution:
         max_when = when if isinstance(when, Real) else max(when)
         self.integrate_to(max_when)
 
-        t_firsts = [state_list[0].t for state_list in self.states[1:]]
+        t_firsts = [solution.t_old for solution in self.solutions]
 
-        inds = np.searchsorted(t_firsts, when, side='right')
+        inds = np.searchsorted(t_firsts, when, side='right') - 1
         if isinstance(when, Real):
-            return self.solutions[inds](when)
+            if when == self.solver.t:
+                # No integration yet
+                return self.solver.y
+            else:
+                return self.solutions[inds](when)
         else:
             output = np.zeros((len(when), self.system.n_states))
             for i_when in range(len(when)):
-                output[i_when] = self.solutions[inds[i_when]](when[i_when])
+                if when[i_when] == self.solver.t:
+                    # No integration yet
+                    output[i_when] = self.solver.y
+                else:
+                    output[i_when] = self.solutions[inds[i_when]](when[i_when])
             return output
 
 

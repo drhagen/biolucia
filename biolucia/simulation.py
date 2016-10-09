@@ -2,7 +2,6 @@ from numbers import Real
 from typing import Union, Sequence
 
 import numpy as np
-from numpy import inf
 
 from .model import Model
 from .ode import LazyIntegrableSolution
