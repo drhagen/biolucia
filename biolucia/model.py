@@ -17,8 +17,8 @@ class AnalyticSegment:
         self.start = start
         self.stop = stop
         if isinstance(expression, str):
-            import biolucia.parser as parser
-            expression = parser.parse_all(parser.expression, expression)
+            from biolucia.parser import ModelParsers
+            expression = ModelParsers.expression.parse(expression).or_die()
         self.expression = expression
 
     def contains(self, symbol: Union[Symbol, str]):
@@ -178,8 +178,8 @@ class PiecewiseAnalytic:
     @staticmethod
     def convert(obj: Union[str, Real, Expr, AnalyticSegment, 'PiecewiseAnalytic']):
         if isinstance(obj, str):
-            from biolucia.parser import expression, token_phase
-            value = PiecewiseAnalytic([AnalyticSegment(-inf, inf, expression.parse(token_phase(obj)))])
+            from biolucia.parser import ModelParsers
+            value = PiecewiseAnalytic([AnalyticSegment(-inf, inf, ModelParsers.expression.parse(obj).or_die())])
             # TODO (drhagen): make this actually parse piecewise
         elif isinstance(obj, Expr) or isinstance(obj, Real):
             value = PiecewiseAnalytic([AnalyticSegment(-inf, inf, obj)])
@@ -355,8 +355,8 @@ class Component:
 
     @staticmethod
     def parse(component: str):
-        import biolucia.parser as parser  # Circular import
-        return parser.component.parse(parser.token_phase(component))
+        from biolucia.parser import ModelParsers  # Circular import
+        return ModelParsers.component.parse(component).or_die()
 
     @staticmethod
     def topological_sort(components: Sequence[Union['Rule', 'Constant']]):

@@ -1,281 +1,189 @@
+import sympy as sp
+from numpy import inf
+from functools import reduce
+from collections import OrderedDict
+from parsita import TextParsers, lit, reg, opt, rep, repsep, rep1sep, failure
+
+
 from biolucia.model import (Model, Constant, Rule, Initial, Ode, State, Dose, Event, Effect, EventDirection,
                             AnalyticSegment)
 
-from funcparserlib.lexer import make_tokenizer
-from funcparserlib.parser import (some, maybe, many, finished, skip,
-                                  forward_decl, NoParseError, Parser)
-from re import VERBOSE
-from enum import Enum
-from numpy import inf
-import sympy as sp
-from functools import reduce
-from collections import OrderedDict
 
+class ModelParsers(TextParsers, whitespace=r'[ \t]*'):
+    real = reg(r'[+-]?\d+(\.\d+)?([Ee][+-]?\d+)?') > float
+    integer = reg(r'0|([1-9][0-9]*)') > int
+    number = real | integer
+    name = reg(r'[A-Za-z_][A-Za-z_0-9]*')
+    symbol = name > sp.Symbol
 
-def test_all(parser: Parser, input):
-    try:
-        return (parser + skip(finished)).parse(input)
-    except NoParseError as e:
-        return e
-
-
-def parse_all(parser: Parser, characters):
-    tokens = token_phase(characters)
-    return test_all(parser, tokens)
-
-
-# Convert a sequence of characters to tokens
-def token_phase(characters: str):
-    specs = [
-        ('comment', (r'#.*',)),
-        ('space', (r'[ \t\r]+',)),
-        ('float', (r'''
-            -?                  # Minus
-            ([0-9]+)            # Int
-            (\.[0-9]+)          # Frac
-            ([Ee][+-]?[0-9]+)?  # Exp''', VERBOSE)),
-        ('integer', (r'0|([1-9][0-9]*)',)),
-        ('name', (r'[A-Za-z_][A-Za-z_0-9]*',)),
-        ('grouping', (r'[\(\)\[\]\{\}]',)),
-        ('operator', (r'[~!@#$%^&*<>:?/\\|\-\+=]+',)),
-        ('prime', (r"'",)),
-        ('comma', (r",",)),
-    ]
-
-    useless = ['comment', 'space']
-
-    tokenizer = make_tokenizer(specs)
-
-    return tuple(token for token in tokenizer(characters) if token.type not in useless)
-
-
-# Match a particular string
-op = lambda value: some(lambda token: token.value == value)
-
-# Match a particular string and discard the result
-op_ = lambda value: skip(some(lambda token: token.value == value))
-
-expression = forward_decl()
-real = some(lambda x: x.type == 'float') >> (lambda x: float(x.value))
-integer = some(lambda x: x.type == 'integer') >> (lambda x: int(x.value))
-number = integer | real
-symbol = some(lambda x: x.type == 'name') >> (lambda name: sp.Symbol(name.value))
-
-
-def make_function(matches):
-    func_name = str(matches[0])
-    arguments = matches[1]
-    combined = [] if arguments is None else [arguments[0]] + arguments[1]
-    if func_name in sp.__dict__:
-        func_handle = sp.__dict__[str(matches[0])]
-    else:
-        raise ValueError('Function "{}" not found. Only functions in sympy.* may be used.'.format(func_name))
-    return func_handle(*combined)
-function = symbol + op_('(') + maybe(expression + many(op_(',') + expression)) + op_(')') >> make_function
-
-
-factor = number | function | symbol | op_('(') + expression + op_(')')
-
-
-def make_exponent(matches):
-    combined = tuple(reversed([matches[0]] + matches[1]))  # Exponentiation is right associative
-    value = combined[0]
-    for factor in combined[1:]:
-        value = sp.Pow(factor, value)
-    return value
-exponent = factor + many(op_('^') + factor) >> make_exponent
-
-
-def make_term(matches):
-    value = matches[0]
-    for op, exponent in matches[1]:
-        if op.value == '/':
-            exponent = sp.Pow(term, -1)  # This is how sympy handles divide
-        value = sp.Mul(value, exponent)
-    return value
-term = exponent + many((op('*') | op('/')) + exponent) >> make_term
-
-
-def make_unary_term(matches):
-    value = matches[1]
-    for op in matches[0]:
-        if op.value == '-':
-            value = -value
-    return value
-unary_term = many(op('+') | op('-')) + term >> make_unary_term
-
-
-def make_expression(matches):
-    value = matches[0]
-    for op, term in matches[1]:
-        if op.value == '-':
-            term = sp.Mul(-1, term)  # This is how sympy handles minus
-        value = sp.Add(value, term)
-    return value
-expression.define(unary_term + many((op('+') | op('-')) + unary_term) >> make_expression)
-
-
-def make_one_sided_time_constant(matches):
-    direction, time = matches
-    if direction.value == '<':
-        return -inf, time
-    else:
-        return time, inf
-one_sided_time = op_('(') + op_('t') + (op('<') | op('>')) + number + op_(')') >> make_one_sided_time_constant
-
-
-def make_two_sided_time_constant(matches):
-    time1, time2 = matches
-    return time1, time2
-two_sided_time = op_('(') + number + op_('<') + op_('t') + op_('<') + number + op_(')') >> make_two_sided_time_constant
-
-time_range = one_sided_time | two_sided_time
-
-
-def make_constant(matches):
-    name = matches[0]
-    if matches[1].value == '+=':
-        additive = True
-    else:
-        additive = False
-    value = matches[2]
-    return name, Constant(name, value, additive)
-constant = symbol + (op('=') | op('+=')) + number >> make_constant
-
-
-def make_rule(matches):
-    name, range, equal_type, expr = matches
-    if range is None:
-        first = -inf
-        last = inf
-    else:
-        first, last = range
-    if equal_type.value == '+=':
-        additive = True
-    else:
-        additive = False
-    return name, Rule(name, AnalyticSegment(first, last, expr), additive)
-rule = symbol + maybe(time_range) + (op('=') | op('+=')) + expression >> make_rule
-
-
-def make_initial(matches):
-    name = matches[0]
-    if matches[1].value == '+=':
-        additive = True
-    else:
-        additive = False
-    value = matches[2]
-    return name, Initial(value, additive)
-initial = symbol + op_('*') + (op('=') | op('+=')) + expression >> make_initial
-
-
-def make_ode(matches):
-    name, range, equal_type, expr = matches
-    if range is None:
-        first = -inf
-        last = inf
-    else:
-        first, last = range
-    if equal_type.value == '+=':
-        additive = True
-    else:
-        additive = False
-    return name, Ode(AnalyticSegment(first, last, expr), additive)
-ode = symbol + maybe(time_range) + op_("'") + (op('=') | op('+=')) + expression >> make_ode
-
-
-def make_dose(matches):
-    name = matches[0]
-    time = matches[1]
-    value = matches[3]
-    if matches[2].value == '+=':
-        value += name
-    return name, Dose(time, value)
-dose = symbol + op_("(") + number + op_(")") + (op('=') | op('+=')) + expression >> make_dose
-
-
-def make_effect(matches):
-    name = matches[0]
-    if matches[1].value == '+=':
-        value = matches[2] + name
-    else:
-        value = matches[2]
-    return Effect(name, value)
-effect = symbol + (op('=') | op('+=')) + expression >> make_effect
-
-
-def make_event(matches):
-    trigger = matches[0] - matches[2]
-    direction = matches[1]
-    effects = [matches[3]] + matches[4]
-    if direction.value == '<':
-        effect_direction = EventDirection.down
-    else:
-        effect_direction = EventDirection.up
-    return Event(trigger, effect_direction, True, effects)
-event = op_('@') + op_('(') + expression + (op('<') | op('>')) + expression + op_(")") + \
-        effect + many(op_(',') + effect) >> make_event
-
-
-component = constant | rule | initial | ode | dose | event
-
-
-def read_model(filename):
-    with open(filename) as file:
-        return parse_model(file.read())
-
-
-def parse_model(text):
-    character_lines = text.splitlines()
-
-    # Tokenize
-    token_lines = []
-    for line in character_lines:
-        tokens_line = token_phase(line)
-
-        if tokens_line:
-            # Keep only non-blank lines
-            token_lines.append(tokens_line)
-
-    class Section(Enum):
-        options = object()
-        components = object()
-
-    active_section = Section.components
-
-    components = []
-
-    tokval = lambda x: x.value
-    toktype = lambda t: some(lambda x: x.type == t) >> tokval
-    header = op_('%') + toktype('name')
-
-    for line in token_lines:
-        maybe_section_name = test_all(header, line)
-        if isinstance(maybe_section_name, str):
-            # Header line encountered
-            if maybe_section_name == 'options':
-                active_section = Section.options
-            elif maybe_section_name == 'components':
-                active_section = Section.components
-            else:
-                raise ValueError()  # TODO (drhagen): better error
-            continue
-
-        if active_section == Section.options:
-            pass
-        elif active_section == Section.components:
-            component_i = test_all(component, line)
-            if isinstance(component_i, NoParseError):
-                raise component_i  # TODO (drhagen): collect all errors are report them at once
-            components.append(component_i)
+    def make_function(x):
+        func_name, arguments = x
+        if func_name in sp.__dict__:
+            func_handle = sp.__dict__[func_name]
         else:
-            raise ValueError()  # Unreachable
+            raise ValueError('Function "{}" not found. Only functions in sympy.* may be used.'.format(func_name))
+        return func_handle(*arguments)
 
-    parts, events = collapse_components(components)
+    function = name & '(' >> repsep(expression, ',') << ')' > make_function
 
-    new_model = Model(parts, events)
+    factor = number | function | symbol | '(' >> expression << ')'
 
-    return new_model
+    def make_term(x):
+        x = tuple(reversed(x))  # Exponentiation is right associative so reverse the list
+        value = x[0]
+        rest = x[1:]
+        for item in rest:
+            value = sp.Pow(item, value)
+        return value
+
+    exponent = rep1sep(factor, '^') > make_term
+
+    def make_term(x):
+        first, rest = x
+        value = first
+        for op, exponent in rest:
+            if op == '/':
+                exponent = sp.Pow(exponent, -1)  # This is how sympy handles divide
+            value = sp.Mul(value, exponent)
+        return value
+
+    term = exponent & rep(lit('*', '/') & exponent) > make_term
+
+    def make_unary_term(x):
+        ops, value = x
+        for op in ops:
+            if op == '-':
+                value = -value
+        return value
+
+    unary_term = rep(lit('+', '-')) & term > make_unary_term
+
+    def make_expression(x):
+        first, rest = x
+        value = first
+        for op, term in rest:
+            if op == '-':
+                term = sp.Mul(-1, term)  # This is how sympy handles minus
+            value = sp.Add(value, term)
+        return value
+
+    expression = unary_term & rep(lit('+', '-') & unary_term) > make_expression
+
+    def make_one_sided_time_constant(x):
+        direction, time = x
+        if direction == '<':
+            return -inf, time
+        else:
+            return time, inf
+
+    one_sided_time = '(' >> lit('t') >> lit('<', '>') & number << ')' > make_one_sided_time_constant
+
+    two_sided_time = '(' >> number << '<' << 't' << '<' & number << ')'
+
+    time_range = one_sided_time | two_sided_time
+
+    def make_constant(x):
+        name, op, value = x
+        if op == '+=':
+            additive = True
+        else:
+            additive = False
+        return name, Constant(name, value, additive)
+
+    constant = symbol & lit('=', '+=') & number > make_constant
+
+    def make_rule(x):
+        name, domain, op, expr = x
+        if not domain:
+            first = -inf
+            last = inf
+        else:
+            first, last = domain[0]
+        if op == '+=':
+            additive = True
+        else:
+            additive = False
+        return name, Rule(name, AnalyticSegment(first, last, expr), additive)
+
+    rule = symbol & opt(time_range) & lit('=', '+=') & expression > make_rule
+
+    def make_initial(x):
+        name, op, value = x
+        if op == '+=':
+            additive = True
+        else:
+            additive = False
+        return name, Initial(value, additive)
+
+    initial = symbol << '*' & lit('=', '+=') & expression > make_initial
+
+    def make_ode(x):
+        name, domain, op, expr = x
+        if not domain:
+            first = -inf
+            last = inf
+        else:
+            first, last = domain[0]
+        if op == '+=':
+            additive = True
+        else:
+            additive = False
+        return name, Ode(AnalyticSegment(first, last, expr), additive)
+
+    ode = symbol & opt(time_range) << "'" & lit('=', '+=') & expression > make_ode
+
+    def make_dose(x):
+        name, time, op, value = x
+        if op == '+=':
+            value += name
+        return name, Dose(time, value)
+
+    dose = symbol << "(" & number << ")" & lit('=', '+=') & expression > make_dose
+
+    def make_effect(x):
+        name, op, value = x
+        if op == '+=':
+            value += name
+        return Effect(name, value)
+
+    effect = symbol & lit('=', '+=') & expression > make_effect
+
+    def make_event(x):
+        left, direction, right, effects = x
+        trigger = left - right
+        if direction == '<':
+            effect_direction = EventDirection.down
+        else:
+            effect_direction = EventDirection.up
+        return Event(trigger, effect_direction, True, effects)
+
+    event = lit('@') >> '(' >> expression & lit('<', '>') & expression << ")" & rep1sep(effect, ',') > make_event
+
+    component = constant | rule | initial | ode | dose | event
+
+    eol = reg(r'(((#.*)?\n)+)|(((#.*)?\n)*(#.*)?\Z)')
+    options_section = '%' >> lit('options') << eol & rep(failure('not implemented') << eol)
+    components_section = '%' >> lit('components') << eol & rep(component << eol)
+
+    def make_model(x):
+        parts = []
+        events = []
+
+        for section_type, lines in x:
+            if section_type == 'options':
+                raise NotImplementedError()
+            elif section_type == 'components':
+                new_parts, new_events = collapse_components(lines)
+                parts += new_parts
+                events += new_events
+            else:
+                raise ValueError('unreachable')
+
+        new_model = Model(parts, events)
+        return new_model
+
+    model = rep(options_section | components_section) > make_model
+    # TODO (drhagen): collect all errors and report them at once
 
 
 def collapse_components(components):
@@ -361,3 +269,8 @@ def collapse_components(components):
             assert False  # Unreachable
 
     return tuple(parts), tuple(events)
+
+
+def read_model(filename):
+    with open(filename) as file:
+        return ModelParsers.model.parse(file.read()).or_die()
