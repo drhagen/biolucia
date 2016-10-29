@@ -1,25 +1,22 @@
-import sympy as sp
+import sympy as sy
 from numpy import inf
 from functools import reduce
 from collections import OrderedDict
 from parsita import TextParsers, lit, reg, opt, rep, repsep, rep1sep, failure
-
 
 from biolucia.model import (Model, Constant, Rule, Initial, Ode, State, Dose, Event, Effect, EventDirection,
                             AnalyticSegment)
 
 
 class ModelParsers(TextParsers, whitespace=r'[ \t]*'):
-    real = reg(r'[+-]?\d+(\.\d+)?([Ee][+-]?\d+)?') > float
-    integer = reg(r'0|([1-9][0-9]*)') > int
-    number = real | integer
+    number = reg(r'[+-]?\d+(\.\d+)?([Ee][+-]?\d+)?') > float
     name = reg(r'[A-Za-z_][A-Za-z_0-9]*')
-    symbol = name > sp.Symbol
+    symbol = name > sy.Symbol
 
     def make_function(x):
         func_name, arguments = x
-        if func_name in sp.__dict__:
-            func_handle = sp.__dict__[func_name]
+        if func_name in sy.__dict__:
+            func_handle = sy.__dict__[func_name]
         else:
             raise ValueError('Function "{}" not found. Only functions in sympy.* may be used.'.format(func_name))
         return func_handle(*arguments)
@@ -29,11 +26,11 @@ class ModelParsers(TextParsers, whitespace=r'[ \t]*'):
     factor = number | function | symbol | '(' >> expression << ')'
 
     def make_term(x):
-        x = tuple(reversed(x))  # Exponentiation is right associative so reverse the list
+        x = list(reversed(x))  # Exponentiation is right associative so reverse the list
         value = x[0]
         rest = x[1:]
         for item in rest:
-            value = sp.Pow(item, value)
+            value = sy.Pow(item, value)
         return value
 
     exponent = rep1sep(factor, '^') > make_term
@@ -43,8 +40,8 @@ class ModelParsers(TextParsers, whitespace=r'[ \t]*'):
         value = first
         for op, exponent in rest:
             if op == '/':
-                exponent = sp.Pow(exponent, -1)  # This is how sympy handles divide
-            value = sp.Mul(value, exponent)
+                exponent = sy.Pow(exponent, -1)  # This is how sympy handles divide
+            value = sy.Mul(value, exponent)
         return value
 
     term = exponent & rep(lit('*', '/') & exponent) > make_term
@@ -63,8 +60,8 @@ class ModelParsers(TextParsers, whitespace=r'[ \t]*'):
         value = first
         for op, term in rest:
             if op == '-':
-                term = sp.Mul(-1, term)  # This is how sympy handles minus
-            value = sp.Add(value, term)
+                term = sy.Mul(-1, term)  # This is how sympy handles minus
+            value = sy.Add(value, term)
         return value
 
     expression = unary_term & rep(lit('+', '-') & unary_term) > make_expression
@@ -90,7 +87,7 @@ class ModelParsers(TextParsers, whitespace=r'[ \t]*'):
             additive = False
         return name, Constant(name, value, additive)
 
-    constant = symbol & lit('=', '+=') & number > make_constant
+    constant = name & lit('=', '+=') & number > make_constant
 
     def make_rule(x):
         name, domain, op, expr = x
@@ -105,7 +102,7 @@ class ModelParsers(TextParsers, whitespace=r'[ \t]*'):
             additive = False
         return name, Rule(name, AnalyticSegment(first, last, expr), additive)
 
-    rule = symbol & opt(time_range) & lit('=', '+=') & expression > make_rule
+    rule = name & opt(time_range) & lit('=', '+=') & expression > make_rule
 
     def make_initial(x):
         name, op, value = x
@@ -115,7 +112,7 @@ class ModelParsers(TextParsers, whitespace=r'[ \t]*'):
             additive = False
         return name, Initial(value, additive)
 
-    initial = symbol << '*' & lit('=', '+=') & expression > make_initial
+    initial = name << '*' & lit('=', '+=') & expression > make_initial
 
     def make_ode(x):
         name, domain, op, expr = x
@@ -130,23 +127,23 @@ class ModelParsers(TextParsers, whitespace=r'[ \t]*'):
             additive = False
         return name, Ode(AnalyticSegment(first, last, expr), additive)
 
-    ode = symbol & opt(time_range) << "'" & lit('=', '+=') & expression > make_ode
+    ode = name & opt(time_range) << "'" & lit('=', '+=') & expression > make_ode
 
     def make_dose(x):
         name, time, op, value = x
         if op == '+=':
-            value += name
+            value += sy.Symbol(name)
         return name, Dose(time, value)
 
-    dose = symbol << "(" & number << ")" & lit('=', '+=') & expression > make_dose
+    dose = name << "(" & number << ")" & lit('=', '+=') & expression > make_dose
 
     def make_effect(x):
         name, op, value = x
         if op == '+=':
-            value += name
+            value += sy.Symbol(name)
         return Effect(name, value)
 
-    effect = symbol & lit('=', '+=') & expression > make_effect
+    effect = name & lit('=', '+=') & expression > make_effect
 
     def make_event(x):
         left, direction, right, effects = x
@@ -162,27 +159,21 @@ class ModelParsers(TextParsers, whitespace=r'[ \t]*'):
     component = constant | rule | initial | ode | dose | event
 
     eol = reg(r'(((#.*)?\n)+)|(((#.*)?\n)*(#.*)?\Z)')
-    options_section = '%' >> lit('options') << eol & rep(failure('not implemented') << eol)
-    components_section = '%' >> lit('components') << eol & rep(component << eol)
+    options_section = '%' >> lit('options') >> eol >> rep(failure('not implemented') << eol)
+    components_section = '%' >> lit('components') >> eol >> rep(component << eol)
 
     def make_model(x):
-        parts = []
-        events = []
+        maybe_options, components = x
 
-        for section_type, lines in x:
-            if section_type == 'options':
-                raise NotImplementedError()
-            elif section_type == 'components':
-                new_parts, new_events = collapse_components(lines)
-                parts += new_parts
-                events += new_events
-            else:
-                raise ValueError('unreachable')
+        if maybe_options:
+            raise NotImplementedError
+
+        parts, events = collapse_components(components)
 
         new_model = Model(parts, events)
         return new_model
 
-    model = rep(options_section | components_section) > make_model
+    model = opt(options_section) & components_section > make_model
     # TODO (drhagen): collect all errors and report them at once
 
 

@@ -63,3 +63,11 @@ class SimulateTestCase(unittest.TestCase):
 
         self.assertEqual(sim.matrix_values(10).shape, (0,))
         self.assertEqual(sim.matrix_values([10, 20]).shape, (2, 0))
+
+    def test_update_events(self):
+        m = equilibrium_model()
+        con = InitialValueExperiment(Model().add('@(B < 2) B = 0'))
+
+        sim = m.simulate(con)
+
+        self.assertTrue(sim.matrix_values(0.7, 'B') < 1)

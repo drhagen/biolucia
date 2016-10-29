@@ -12,6 +12,10 @@ class PiecewiseTestCase(unittest.TestCase):
         expr_whole = PiecewiseAnalytic([AnalyticSegment(10, 20, ex('z + y')), AnalyticSegment(20, 30, ex('z + 5'))])
         self.assertEqual(expr.subs([('x', whole)]), expr_whole)
 
+        whole = PiecewiseAnalytic([AnalyticSegment(-inf, inf, ex('z'))])
+        expr_whole = PiecewiseAnalytic([AnalyticSegment(10, 20, ex('z + y')), AnalyticSegment(20, 30, ex('z + 5'))])
+        self.assertEqual(expr.subs([('x', whole)]), expr_whole)
+
         front = PiecewiseAnalytic([AnalyticSegment(0, 15, ex('z'))])
         expr_front = PiecewiseAnalytic([AnalyticSegment(10, 15, ex('z + y'))])
         self.assertEqual(expr.subs([('x', front)]), expr_front)

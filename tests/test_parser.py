@@ -8,22 +8,22 @@ from biolucia.parser import *
 class ParserTestCase(unittest.TestCase):
     def test_parse_components(self):
         a = ModelParsers.constant.parse('a = 10').or_die()
-        self.assertEqual(a, (Symbol('a'), Constant('a', 10)))
+        self.assertEqual(a, ('a', Constant('a', 10)))
 
         b = ModelParsers.rule.parse('b = x + y').or_die()
-        self.assertEqual(b, (Symbol('b'), Rule('b', 'x + y')))
+        self.assertEqual(b, ('b', Rule('b', 'x + y')))
 
         c = ModelParsers.initial.parse('c* = sin(x)').or_die()
-        self.assertEqual(c, (Symbol('c'), Initial('sin(x)')))
+        self.assertEqual(c, ('c', Initial('sin(x)')))
 
         c = ModelParsers.initial.parse('c* = atan2(x, y)').or_die()
-        self.assertEqual(c, (Symbol('c'), Initial('atan2(x, y)')))
+        self.assertEqual(c, ('c', Initial('atan2(x, y)')))
 
         d = ModelParsers.dose.parse('d(1.2) = dose ^ 2').or_die()
-        self.assertEqual(d, (Symbol('d'), Dose(1.2, 'dose ** 2')))
+        self.assertEqual(d, ('d', Dose(1.2, 'dose ** 2')))
 
         e = ModelParsers.ode.parse("e' = (s) + x * r").or_die()
-        self.assertEqual(e, (Symbol('e'), Ode('s + r*x')))
+        self.assertEqual(e, ('e', Ode('s + r*x')))
 
         ee = ModelParsers.ode.parse("e' = ((s) + (x * r))").or_die()
         self.assertEqual(e, ee)
@@ -41,26 +41,22 @@ class ParserTestCase(unittest.TestCase):
         self.assertEqual(g, f)
 
         h = ModelParsers.ode.parse("e' = 0").or_die()
-        self.assertEqual(h, (Symbol('e'), Ode('0')))
+        self.assertEqual(h, ('e', Ode('0')))
 
         i = ModelParsers.initial.parse("e* = 1.2").or_die()
-        self.assertEqual(i, (Symbol('e'), Initial(1.2)))
+        self.assertEqual(i, ('e', Initial(1.2)))
 
         j = ModelParsers.rule.parse("j(t<10) = z*2").or_die()
-        self.assertEqual(j, (Symbol('j'), Rule('j', AnalyticSegment(-inf, 10, 'z*2'))))
+        self.assertEqual(j, ('j', Rule('j', AnalyticSegment(-inf, 10, 'z*2'))))
 
         k = ModelParsers.rule.parse("k(1 < t < 10) = z*2").or_die()
-        self.assertEqual(k, (Symbol('k'), Rule('k', AnalyticSegment(1, 10, 'z*2'))))
+        self.assertEqual(k, ('k', Rule('k', AnalyticSegment(1, 10, 'z*2'))))
 
         l = ModelParsers.ode.parse("l(1 < t < 10)' = cos(t)").or_die()
-        self.assertEqual(l, (Symbol('l'), Ode(AnalyticSegment(1, 10, 'cos(t)'))))
+        self.assertEqual(l, ('l', Ode(AnalyticSegment(1, 10, 'cos(t)'))))
 
     def test_combined_components(self):
         a = ModelParsers.model.parse('%components').or_die()
-        self.assertEqual(len(a.parts), 0)
-        self.assertEqual(len(a.events), 0)
-
-        a = ModelParsers.model.parse('').or_die()
         self.assertEqual(len(a.parts), 0)
         self.assertEqual(len(a.events), 0)
 

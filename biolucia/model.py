@@ -1,4 +1,5 @@
-import enum
+from enum import IntEnum
+from collections import OrderedDict
 from typing import Sequence, Tuple, Union, Dict, List
 
 from sympy import Expr, Piecewise, Symbol, lambdify, And
@@ -52,12 +53,14 @@ class PiecewiseAnalytic:
             current_self_index = 0
             current_replacer_index = 0
 
-            if isinstance(replacer, Real):
+            if isinstance(replacer, Real) or isinstance(replacer, Expr):
                 for current_segment in old_segments:
-                    new_segments.append(AnalyticSegment(current_segment.start,
-                                                     current_segment.stop,
-                                                     current_segment.expression.subs({name: replacer})))
-
+                    if isinstance(current_segment.expression, Real):
+                        new_segments.append(current_segment)
+                    else:
+                        new_segments.append(AnalyticSegment(current_segment.start,
+                                                            current_segment.stop,
+                                                            current_segment.expression.subs({name: replacer})))
             else:
                 while current_self_index < len(old_segments) and current_replacer_index < len(replacer.segments):
                     current_segment = old_segments[current_self_index]
@@ -73,12 +76,16 @@ class PiecewiseAnalytic:
                         # Overlap exists, do substitution
                         start = max(current_segment.start, current_replacer.start)
                         stop = min(current_segment.stop, current_replacer.stop)
+                        if isinstance(current_segment.expression, Real):
+                            expression = current_segment.expression
+                        else:
+                            expression = current_segment.expression.subs(
+                                {name: current_replacer.expression}
+                            )
                         new_segments.append(AnalyticSegment(start,
-                                                         stop,
-                                                         current_segment.expression.subs(
-                                                             {name: current_replacer.expression}
-                                                         ))
-                                         )
+                                                            stop,
+                                                            expression)
+                                            )
 
                         if current_segment.stop >= current_replacer.stop:
                             current_replacer_index += 1
@@ -235,8 +242,11 @@ class Effect:
         self.value = PiecewiseAnalytic.convert(value)
 
     def subs(self, components: Sequence[Union['Rule', 'Constant']]):
-        replacers = [(component.name, component.evaluate(0)) for component in components]
-        return Effect(self.target, self.value.subs(replacers))
+        if isinstance(self.value, Real):
+            return self
+        else:
+            replacers = [(component.name, component.evaluate(0)) for component in components]
+            return Effect(self.target, self.value.subs(replacers))
 
     def __eq__(self, other):
         return self.target == other.target and self.value == other.value
@@ -247,7 +257,7 @@ class Effect:
     __repr__ = __str__
 
 
-class EventDirection(enum.IntEnum):
+class EventDirection(IntEnum):
     up = +1
     down = -1
 
@@ -391,6 +401,18 @@ class Constant(Component):
     def has_overlap(self, other: Union['Constant', 'Rule']):
         return True
 
+    def copy(self, name: Union[Symbol, str] = None, value: float = None, additive: bool = None):
+        if name is None:
+            name = self.name
+
+        if value is None:
+            value = self.value
+
+        if additive is None:
+            additive = self.additive
+
+        return Constant(name, value, additive)
+
     def __eq__(self, other):
         return self.name == other.name and self.value == other.value
 
@@ -406,8 +428,11 @@ class Rule(Component):
         self.additive = additive
 
     def subs(self, components: Sequence[Union['Rule', 'Constant']]):
-        replacers = [(rule.name, rule.value) for rule in components]
-        return Rule(self.name, self.value.subs(replacers), self.additive)
+        if isinstance(self.value, Real):
+            return self
+        else:
+            replacers = [(rule.name, rule.value) for rule in components]
+            return Rule(self.name, self.value.subs(replacers), self.additive)
 
     def contains(self, symbol: str):
         return self.value.contains(symbol)
@@ -469,8 +494,8 @@ class State(Component):
 
 class Model:
     def __init__(self, parts: Sequence[Component] = (), events: Sequence[Event] = ()):
-        parts = tuple(parts) # type: Sequence[Component]
-        events = tuple(events) # type: Sequence[Event]
+        parts = tuple(parts)  # type: Sequence[Component]
+        events = tuple(events)  # type: Sequence[Event]
 
         self.parts = parts
         self.events = events
@@ -560,7 +585,33 @@ class Model:
             else:
                 new_parts.append(new_part)
 
-        return Model(new_parts)
+        # Events are simply concatenated
+        new_events = self.events + variant.events
+
+        return Model(new_parts, new_events)
+
+    def default_parameters(self):
+        parameters = []  # List[Tuple[str, float]]
+
+        for part in self.parts:
+            if isinstance(part, Constant):
+                parameters.append((str(part.name), part.value))
+
+        return OrderedDict(parameters)
+
+    def update_parameters(self, parameters: Dict[str, float]):
+        new_parts = []
+
+        for part in self.parts:
+            if str(part.name) in parameters:
+                if isinstance(part, Constant):
+                    new_parts.append(part.copy(value=parameters[str(part.name)]))
+                else:
+                    raise ValueError('Part {} cannot be a parameter because it is not a Constant'.format(part.name))
+            else:
+                new_parts.append(part)
+
+        return self.copy(parts=new_parts)
 
     def build_odes(self, parameters: Sequence[str] = ()):
         parameters = tuple(parameters)
@@ -688,7 +739,7 @@ class Model:
     def simulate(self, experiment: 'Experiment' = None):
         from biolucia.experiment import InitialValueExperiment
         experiment = InitialValueExperiment() if experiment is None else experiment
-        return experiment._simulate(self)
+        return experiment.simulate(self)
 
     def observable_names(self):
         return tuple(str(part.name) for part in self.parts)

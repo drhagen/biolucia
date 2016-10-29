@@ -1,5 +1,6 @@
 import unittest
 
+from biolucia.parser import ModelParsers
 from biolucia.helpers import *
 from biolucia.model import *
 import numpy as np
@@ -25,6 +26,27 @@ class ComponentReplaceTestCase(unittest.TestCase):
 
         self.assertEqual(z_all.evaluate(0), 6)
         self.assertEqual(z_all.evaluate(12), 8)
+
+    def test_float_subs(self):
+        components = [ModelParsers.rule.parse('B = x * 2').or_die()[1]]
+
+        rule = ModelParsers.rule.parse('A = 1').or_die()[1]
+        self.assertEqual(rule, rule.subs(components))
+
+        constant = ModelParsers.constant.parse('A = 1').or_die()[1]
+        self.assertEqual(constant, constant.subs(components))
+
+        initial = ModelParsers.initial.parse('A* = 1').or_die()[1]
+        self.assertEqual(initial, initial.subs(components))
+
+        ode = ModelParsers.ode.parse("A' = 1").or_die()[1]
+        self.assertEqual(ode, ode.subs(components))
+
+        dose = ModelParsers.dose.parse("A(1) = 1").or_die()[1]
+        self.assertEqual(dose, dose.subs(components))
+
+        event = ModelParsers.event.parse("@(A > 2) A = 1").or_die()
+        self.assertEqual(event, event.subs(components))
 
 
 class ContainsTestCase(unittest.TestCase):
@@ -103,3 +125,15 @@ class OdeBuildingTestCase(unittest.TestCase):
 
         real_jacobian = [[-2.5, -5.0, 0.2], [-2.5, -5.0, 0.2], [2.5, 5.0, -0.2]]
         self.assertTrue(np.array_equal(system.jacobian(0, system.ics()), real_jacobian))
+
+
+class ParameterUpdatingTestCase(unittest.TestCase):
+    def test_updating_model_parameters(self):
+        m = equilibrium_model()
+
+        new_parameters = {'kf': 1.2, 'B0': 7}
+
+        m_new = m.update_parameters(new_parameters)
+
+        self.assertEqual(m_new['B0'], Constant('B0', 7))
+        self.assertEqual(m_new['kf'], Constant('kf', 1.2))

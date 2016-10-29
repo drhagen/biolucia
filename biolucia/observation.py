@@ -32,7 +32,8 @@ class Objective:
 
 
 class LinearWeightedSumOfSquaresObservation(Observation):
-    def __init__(self, ts: Sequence[Real], ys: Sequence[Symbol], uncertainty_function: Callable[[Real, Symbol, Real], Real]):
+    def __init__(self, ts: Sequence[Real], ys: Sequence[Symbol],
+                 uncertainty_function: Callable[[Real, Symbol, Real], Real]):
         ts = np.asarray(ts)
         ys = np.asarray(ys)
 

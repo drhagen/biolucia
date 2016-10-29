@@ -11,7 +11,7 @@ class Simulation:
     """Abstract base class for simulations, which lazily produce values for all components at all
     time points 0 to infinity"""
     def matrix_values(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str], None]=None):
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def vector_values(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str]]):
         when_unique, when_unique_indexes = np.unique(when, return_inverse=True)
@@ -23,7 +23,7 @@ class Simulation:
 
     def matrix_sensitivities(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str], None]=None,
                              parameters: Union[str, Sequence[str], None] = None):
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def vector_sensitivities(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str]],
                              parameters: Union[str, Sequence[str], None] = None):
@@ -35,14 +35,14 @@ class Simulation:
 
         return result_matrix[when_unique_indexes, which_unique_indexes, parameters_unique]
 
-    def matrix_curvature(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str], None]=None,
-                         parameters1: Union[str, Sequence[str], None] = None,
-                         parameters2: Union[str, Sequence[str], None] = None):
-        raise NotImplementedError()
+    def matrix_curvatures(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str], None]=None,
+                          parameters1: Union[str, Sequence[str], None] = None,
+                          parameters2: Union[str, Sequence[str], None] = None):
+        raise NotImplementedError
 
-    def vector_curvature(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str]],
-                         parameters1: Union[str, Sequence[str], None] = None,
-                         parameters2: Union[str, Sequence[str], None] = None):
+    def vector_curvatures(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str]],
+                          parameters1: Union[str, Sequence[str], None] = None,
+                          parameters2: Union[str, Sequence[str], None] = None):
         when_unique, when_unique_indexes = np.unique(when, return_inverse=True)
         which_unique, which_unique_indexes = np.unique(which, return_inverse=True)
         parameters1_unique, parameters1_unique_indexes = np.unique(parameters1, return_inverse=True)
