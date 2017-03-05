@@ -1,7 +1,8 @@
 from numbers import Real
-from typing import Union, Sequence
+from typing import Union, Sequence, Dict, Tuple
 
 import numpy as np
+from scipy import sparse
 
 from .model import Model
 from .ode import LazyIntegrableSolution
@@ -21,51 +22,50 @@ class Simulation:
 
         return result_matrix[when_unique_indexes, which_unique_indexes]
 
-    def matrix_sensitivities(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str], None]=None,
-                             parameters: Union[str, Sequence[str], None] = None):
+    def matrix_sensitivities(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str], None]=None):
         raise NotImplementedError
 
-    def vector_sensitivities(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str]],
-                             parameters: Union[str, Sequence[str], None] = None):
+    def vector_sensitivities(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str]]):
         when_unique, when_unique_indexes = np.unique(when, return_inverse=True)
         which_unique, which_unique_indexes = np.unique(which, return_inverse=True)
-        parameters_unique, parameters_unique_indexes = np.unique(parameters, return_inverse=True)
 
-        result_matrix = self.matrix_sensitivities(when_unique, which_unique, parameters_unique)
+        result_matrix = self.matrix_sensitivities(when_unique, which_unique)
 
-        return result_matrix[when_unique_indexes, which_unique_indexes, parameters_unique]
+        return result_matrix[when_unique_indexes, which_unique_indexes, :]
 
-    def matrix_curvatures(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str], None]=None,
-                          parameters1: Union[str, Sequence[str], None] = None,
-                          parameters2: Union[str, Sequence[str], None] = None):
+    def matrix_curvatures(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str], None]=None):
         raise NotImplementedError
 
-    def vector_curvatures(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str]],
-                          parameters1: Union[str, Sequence[str], None] = None,
-                          parameters2: Union[str, Sequence[str], None] = None):
+    def vector_curvatures(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str]]):
         when_unique, when_unique_indexes = np.unique(when, return_inverse=True)
         which_unique, which_unique_indexes = np.unique(which, return_inverse=True)
-        parameters1_unique, parameters1_unique_indexes = np.unique(parameters1, return_inverse=True)
-        parameters2_unique, parameters2_unique_indexes = np.unique(parameters2, return_inverse=True)
 
-        result_matrix = self.matrix_sensitivities(when_unique, which_unique, parameters1_unique, parameters2_unique)
+        result_matrix = self.matrix_curvatures(when_unique, which_unique)
 
-        return result_matrix[when_unique_indexes, which_unique_indexes, parameters1_unique, parameters2_unique]
+        return result_matrix[when_unique_indexes, which_unique_indexes]
 
 
 class BioluciaSystemSimulation(Simulation):
-    def __init__(self, system: Model, final_time: float = 0.0):
+    def __init__(self, system: Model, final_time: float = 0.0, parameters = ()):
         self._observable_names = system.observable_names()
-        self.ode_system = system.build_odes()
+        self.ode_system = system.build_odes(parameters)
+        self.parameters = parameters
 
-        self.solution = LazyIntegrableSolution(self.ode_system)
+        self.solution = LazyIntegrableSolution(self.ode_system.x0, self.ode_system.f, self.ode_system.f_dx,
+                                               self.ode_system.discontinuities, self.ode_system.t_dose,
+                                               self.ode_system.d, self.ode_system.e, self.ode_system.e_dir,
+                                               self.ode_system.e_eff)
         self.solution.integrate_to(final_time)
 
-    def matrix_values(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str]]=None):
+        self.sensitivities = LazyIntegrableSolution(self.ode_system.x0_dk.flatten(), self.odes_dk, self.jacobian_dk,
+                                                    self.ode_system.discontinuities, [], [],
+                                                    [], np.empty((0,)), [])
+
+    def matrix_values(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str]] = None):
         which = self._observable_names if which is None else which
 
         # Extract values from solution
-        output_fun = self.ode_system.outputs
+        output_fun = self.ode_system.y
         if isinstance(which, str) and isinstance(when, Real):
             states = self.solution(when)
             return output_fun(which, when, states)
@@ -89,3 +89,52 @@ class BioluciaSystemSimulation(Simulation):
 
             values = np.fromiter(values(), 'float', count=len(which)*len(when))
             return np.reshape(values, [len(when), len(which)])
+
+    def odes_dk(self, t, x_dk):
+        nx = len(self.ode_system.x0)
+        nk = len(self.ode_system.k)
+        x = self.solution(t)
+
+        return (self.ode_system.f_dx(t, x) @ x_dk.reshape(nx, nk) + self.ode_system.f_dk(t, x)).flatten()
+
+    def jacobian_dk(self, t, x_dk):
+        nk = len(self.ode_system.k)
+        x = self.solution(t)
+
+        return sparse.kron(sparse.identity(nk), self.ode_system.f_dx(t, x), format='csc')
+
+    def matrix_sensitivities(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str], None] = None):
+        which = self._observable_names if which is None else which
+
+        # Extract values from solution
+        if isinstance(which, str) and isinstance(when, Real):
+            states = self.solution(when)
+            sensitivities = self.sensitivities(when).reshape((len(states), len(self.ode_system.k)))
+            return self.ode_system.y_dx(which, when, states) @ sensitivities + self.ode_system.y_dk(which, when, states)
+        elif isinstance(which, str):
+            # when is a sequence
+            outputs = np.empty((len(when), len(self.parameters)))
+            for i_when in range(len(when)):
+                states = self.solution(when[i_when])
+                sensitivities = self.sensitivities(when[i_when]).reshape((len(states), len(self.ode_system.k)))
+                outputs[i_when, :] = (self.ode_system.y_dx(which, when[i_when], states) @ sensitivities
+                                      + self.ode_system.y_dk(which, when[i_when], states))
+            return outputs
+        elif isinstance(when, Real):
+            states = self.solution(when)
+            sensitivities = self.sensitivities(when).reshape((len(states), len(self.ode_system.k)))
+            outputs = np.empty((len(which), len(self.parameters)))
+            for i_which in range(len(which)):
+                outputs[i_which, :] = (self.ode_system.y_dx(which[i_which], when, states) @ sensitivities
+                                       + self.ode_system.y_dk(which[i_which], when, states))
+            return outputs
+        else:
+            outputs = np.empty((len(when), len(which), len(self.parameters)))
+            for i_when in range(len(when)):
+                states = self.solution(when[i_when])
+                sensitivities = self.sensitivities(when[i_when]).reshape((len(states), len(self.ode_system.k)))
+                for i_which in range(len(which)):
+                    outputs[i_when, i_which, :] = (self.ode_system.y_dx(which[i_which], when[i_when], states)
+                                                   @ sensitivities
+                                                   + self.ode_system.y_dk(which[i_which], when[i_when], states))
+            return outputs

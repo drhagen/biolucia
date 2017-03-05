@@ -1,3 +1,4 @@
+from numbers import Real
 from collections import OrderedDict
 from numpy import reshape, prod, ndarray
 from sympy import Expr, Symbol, lambdify
@@ -55,7 +56,11 @@ def multidimensional_derivative(expressions: np.ndarray, symbols: Sequence['Symb
     for i_expression in np.ndindex(expressions.shape):
         for i_symbol in range(len(symbols)):
             index = i_expression + (i_symbol,)
-            derivative[index] = expressions[i_expression].diff(symbols[i_symbol])
+            expression = expressions[i_expression]
+            if isinstance(expression, Real):
+                derivative[index] = 0
+            else:
+                derivative[index] = expression.diff(symbols[i_symbol])
 
     return derivative
 

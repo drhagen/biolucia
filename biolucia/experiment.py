@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Sequence
 
 from biolucia.model import Model
 
@@ -31,9 +31,9 @@ class InitialValueExperiment(Experiment):
     def __init__(self, variant: Model = Model()):
         self.variant = variant
 
-    def simulate(self, model: Model, final_time=0.0):
+    def simulate(self, model: Model, final_time: float = 0.0, parameters: Sequence[str] = ()):
         system = model.update(self.variant)
-        return BioluciaSystemSimulation(system, final_time)
+        return BioluciaSystemSimulation(system, final_time, parameters)
 
     def default_parameters(self):
         return self.variant.default_parameters()
@@ -48,14 +48,14 @@ class SteadyStateExperiment(Experiment):
         self.starter = starter
         self.variant = variant
 
-    def simulate(self, model: Model, final_time=0.0):
+    def simulate(self, model: Model, final_time=0.0, parameters: Sequence[str] = ()):
         starter = model.update(self.starter)
         system = model.update(self.variant)
 
         starter = starter.run_to_steady_state()
         system = system.update_initial(starter)
 
-        return BioluciaSystemSimulation(system, final_time)
+        return BioluciaSystemSimulation(system, final_time, parameters)
 
     def default_parameters(self):
         return self.variant.default_parameters()

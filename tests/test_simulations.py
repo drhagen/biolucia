@@ -1,4 +1,5 @@
 import unittest
+import numpy as np
 from numpy.testing import assert_allclose
 
 from biolucia.model import *
@@ -21,9 +22,25 @@ class SimulateTestCase(unittest.TestCase):
         self.assertEqual(sim.matrix_values(0, 'A'), 10)
         self.assertLess(sim.matrix_values(1, 'A'), 10)
 
-        assert_allclose(sim.matrix_values(0, ['A', 'B']), array([10, 5]))
-        assert_allclose(sim.matrix_values([0, 1], 'kf'), array([0.5, 0.5]))
-        assert_allclose(sim.matrix_values([0, 1, 2], ['kr', 'kf']), array([[0.2, 0.5], [0.2, 0.5], [0.2, 0.5]]))
+        assert_allclose(sim.matrix_values(0, ['A', 'B']), np.array([10, 5]))
+        assert_allclose(sim.matrix_values([0, 1], 'kf'), np.array([0.5, 0.5]))
+        assert_allclose(sim.matrix_values([0, 1, 2], ['kr', 'kf']), np.array([[0.2, 0.5], [0.2, 0.5], [0.2, 0.5]]))
+
+    def test_simulate_sensitivity(self):
+        m = equilibrium_model()
+        con = InitialValueExperiment()
+
+        sim = m.simulate(con, parameters=['A0', 'kr'])
+
+        assert_allclose(sim.matrix_sensitivities(0.0, 'A'), [1.0, 0.0])
+        self.assertEqual(sim.matrix_sensitivities(0.0, 'A').shape, (2,))
+        assert_allclose(sim.matrix_sensitivities([0.0, 10.0], 'A0'), [[1.0, 0.0], [1.0, 0.0]])
+        self.assertEqual(sim.matrix_sensitivities([0.0, 10.0], 'A0').shape, (2,2))
+        assert_allclose(sim.matrix_sensitivities(0.0, ['A', 'A0']), [[1.0, 0.0], [1.0, 0.0]])
+        self.assertEqual(sim.matrix_sensitivities(0.0, ['A', 'A0']).shape, (2, 2))
+        assert_allclose(sim.matrix_sensitivities([0.0, 10.0], ['A0', 'B0']), [[[1.0, 0.0], [0.0, 0.0]],
+                                                                              [[1.0, 0.0], [0.0, 0.0]]])
+        self.assertEqual(sim.matrix_sensitivities([0.0, 10.0], ['A', 'A0']).shape, (2, 2, 2))
 
     def test_simulate_system2(self):
         m = equilibrium_model()

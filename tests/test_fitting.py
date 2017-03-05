@@ -4,7 +4,7 @@ from collections import OrderedDict
 from biolucia.model import Model
 from biolucia.experiment import InitialValueExperiment
 from biolucia.fitting import ActiveParameters, fit_parameters
-from biolucia.observation import LinearWeightedSumOfSquaresObservation
+from biolucia.observation import LinearWeightedSumOfSquaresObservation, AffineMeasurementUncertainty
 from .test_models import equilibrium_model, equilibrium_dose_variant
 
 
@@ -58,7 +58,7 @@ class FittingTestCase(TestCase):
     def test_basic_fitting(self):
         m = Model().add('k = 10')
         con = InitialValueExperiment()
-        obj = LinearWeightedSumOfSquaresObservation([0], ['k'], lambda t, yid, y: [1]*len(t)).objective([20])
+        obj = LinearWeightedSumOfSquaresObservation([0], ['k'], AffineMeasurementUncertainty(1, 0)).objective([20])
 
         fitted_parameters = fit_parameters(m, [con], [obj], model_parameters='k')
 

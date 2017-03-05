@@ -52,6 +52,12 @@ class PiecewiseTestCase(unittest.TestCase):
         expr_constant = PiecewiseAnalytic([AnalyticSegment(10, 20, ex('5')), AnalyticSegment(20, 30, ex('8'))])
         self.assertEqual(expr.subs([('x', 3), ('y', 2)]), expr_constant)
 
+    def test_differentiation(self):
+        expr = PiecewiseAnalytic([AnalyticSegment(10, 20, ex('x + y')), AnalyticSegment(20, 30, ex('x + 5'))])
+
+        der1 = expr.diff('x')
+        self.assertEqual(der1, PiecewiseAnalytic([AnalyticSegment(10, 30, 1)]))
+
     def test_to_function(self):
         expr = PiecewiseAnalytic([AnalyticSegment(10, 20, ex('x + y')), AnalyticSegment(20, 30, ex('x + 5'))])
         func = expr.to_function(['t', 'x', 'y'])

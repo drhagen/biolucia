@@ -2,15 +2,15 @@ from enum import IntEnum
 from collections import OrderedDict
 from typing import Sequence, Tuple, Union, Dict, List
 
-from sympy import Expr, Piecewise, Symbol, lambdify, And
+from sympy import Expr, Piecewise, Symbol, lambdify, And, diff
 import numpy as np
-from numpy import inf, nan, array
+from numpy import inf, nan
 from itertools import permutations
 from sympy.utilities.iterables import topological_sort
 from sympy.parsing.sympy_parser import parse_expr
 from numbers import Real
-from biolucia.analytic import multidimensional_derivative, multidimensional_lambdify
-from biolucia.ode import IntegrableSystem
+
+from .ode import IntegrableSystem
 
 
 class AnalyticSegment:
@@ -20,7 +20,7 @@ class AnalyticSegment:
         if isinstance(expression, str):
             from biolucia.parser import ModelParsers
             expression = ModelParsers.expression.parse(expression).or_die()
-        self.expression = expression
+        self.expression = expression  # type: Union[Expr, Real]
 
     def contains(self, symbol: Union[Symbol, str]):
         return self.expression.has(symbol)
@@ -46,7 +46,7 @@ class PiecewiseAnalytic:
         # All parts must be non-overlapping and sorted
         self.segments = segments
         
-    def subs(self, replacers: Sequence[Tuple[Union['PiecewiseAnalytic', Real, str]]]):
+    def subs(self, replacers: Sequence[Tuple[str, Union['PiecewiseAnalytic', Real, Expr]]]):
         old_segments = self.segments
         new_segments = []
         for name, replacer in replacers:
@@ -54,6 +54,7 @@ class PiecewiseAnalytic:
             current_replacer_index = 0
 
             if isinstance(replacer, Real) or isinstance(replacer, Expr):
+                # Segments are unaffected because replacer is uniform
                 for current_segment in old_segments:
                     if isinstance(current_segment.expression, Real):
                         new_segments.append(current_segment)
@@ -84,8 +85,7 @@ class PiecewiseAnalytic:
                             )
                         new_segments.append(AnalyticSegment(start,
                                                             stop,
-                                                            expression)
-                                            )
+                                                            expression))
 
                         if current_segment.stop >= current_replacer.stop:
                             current_replacer_index += 1
@@ -97,7 +97,7 @@ class PiecewiseAnalytic:
 
         return PiecewiseAnalytic(old_segments)
 
-    def contains(self, symbol: str):
+    def contains(self, symbol: Union[Symbol, str]):
         for segment in self.segments:
             if segment.contains(symbol):
                 return True
@@ -182,6 +182,19 @@ class PiecewiseAnalytic:
                     return True
         return False
 
+    def diff(self, symbol: Union[Symbol, str]):
+        new_segments = []
+
+        for segment in self.segments:
+            new_expression = diff(segment.expression, symbol)
+            if (len(new_segments) > 0 and new_expression == new_segments[-1].expression
+                    and new_segments[-1].stop == segment.start):
+                new_segments[-1].stop = segment.stop
+            else:
+                new_segments.append(AnalyticSegment(segment.start, segment.stop, new_expression))
+
+        return PiecewiseAnalytic(new_segments)
+
     @staticmethod
     def convert(obj: Union[str, Real, Expr, AnalyticSegment, 'PiecewiseAnalytic']):
         if isinstance(obj, str):
@@ -196,7 +209,7 @@ class PiecewiseAnalytic:
         elif isinstance(obj, PiecewiseAnalytic):
             value = obj
         else:
-            raise ValueError()
+            raise ValueError('Object of type {} cannot be converted to PiecewiseAnalytic'.format(type(obj)))
         return value
 
     def to_function(self, variables: Sequence[Union[str, Symbol]]):
@@ -613,21 +626,22 @@ class Model:
 
         return self.copy(parts=new_parts)
 
-    def build_odes(self, parameters: Sequence[str] = ()):
-        parameters = tuple(parameters)
+    # TODO: memoize this
+    def build_odes(self, parameter_names: Sequence[str] = ()):
+        parameter_names = list(parameter_names)
 
         active_constant_indexes = []
         active_constants = []  # type: List[Constant]
         inactive_constant_indexes = []
         inactive_constants = []  # type: List[Constant]
         rule_indexes = []
-        rules = []  # type: List[Rule]
+        rule_objects = []  # type: List[Rule]
         state_indexes = []
-        states = []  # type: List[State]
-        
+        state_objects = []  # type: List[State]
+
         for i, part in enumerate(self.parts):
             if isinstance(part, Constant):
-                if part.name in parameters:
+                if str(part.name) in parameter_names:
                     active_constant_indexes.append(i)
                     active_constants.append(part)
                 else:
@@ -635,111 +649,90 @@ class Model:
                     inactive_constants.append(part)
             elif isinstance(part, Rule):
                 rule_indexes.append(i)
-                rules.append(part)
+                rule_objects.append(part)
             elif isinstance(part, State):
                 state_indexes.append(i)
-                states.append(part)
+                state_objects.append(part)
 
-        events = self.events
+        event_objects = self.events
+
+        state_names = [str(state.name) for state in state_objects]
 
         # Substitute constants and rules into rules
-        rules = Rule.topological_sort(rules)
-        for i in range(len(rules)):
-            rules[i] = rules[i].subs(inactive_constants)
-            rules[i] = rules[i].subs(rules[i+1:])
+        rule_objects = Rule.topological_sort(rule_objects)
+        for i in range(len(rule_objects)):
+            rule_objects[i] = rule_objects[i].subs(inactive_constants)
+            rule_objects[i] = rule_objects[i].subs(rule_objects[i + 1:])
 
         # Substitute constants and rules into odes
-        states = tuple(state.subs(inactive_constants) for state in states)
-        states = tuple(state.subs(rules) for state in states)
+        state_objects = [state.subs(inactive_constants) for state in state_objects]
+        state_objects = [state.subs(rule_objects) for state in state_objects]
 
-        events = tuple(event.subs(inactive_constants) for event in events)
-        events = tuple(event.subs(rules) for event in events)
+        event_objects = [event.subs(inactive_constants) for event in event_objects]
+        event_objects = [event.subs(rule_objects) for event in event_objects]
 
-        # Replace symbols
-        n_parameters = len(parameters)
-        parameter_values = array([constant.value for constant in active_constants])
+        # Extract symbols
+        parameter_values = np.asarray([constant.value for constant in active_constants], dtype=float)
+        parameters = OrderedDict(zip(parameter_names, parameter_values))
 
-        n_states = len(states)
-        state_names = tuple(state.name for state in states)
-        initials = [state.initial.value for state in states]
-
-        initials_function = lambdify(parameters, initials)
-
-        all_parameters = ('t',) + state_names + parameters
-
-        ode = [state.ode.value.to_sympy() for state in states]
-        ode_function = lambdify(all_parameters, ode)
-
-        jacobian = multidimensional_derivative(ode, state_names)
-        jacobian_function = multidimensional_lambdify(all_parameters, jacobian)
+        initials = [state.initial.value for state in state_objects]
+        ode = [state.ode.value.to_sympy() for state in state_objects]
+        states = OrderedDict(zip(state_names, list(zip(initials, ode))))
 
         # Collect discontinuities
-        discontinuities = [time for state in states for time in state.ode.value.discontinuities]
-        discontinuities = tuple(sorted(set(discontinuities)))  # sorted distinct
+        discontinuities = [time for state in state_objects for time in state.ode.value.discontinuities]
+        discontinuities = list(sorted(set(discontinuities)))  # sorted distinct
 
         # Build dose functions
         # Map time to every dose given at that time
         dose_groups = dict()  # type: Dict[float, List[Expr]]
-        for (i, state) in enumerate(states):
+        for (i, state) in enumerate(state_objects):
             for dose in state.doses:
                 time = dose.time
                 if time not in dose_groups:
                     # Initialize a dose at this time
-                    dose_groups[time] = [state.name for state in states]  # list is going to be mutated
+                    dose_groups[time] = [state.name for state in state_objects]  # list is going to be mutated
 
                 # Replace the zero at the state's index with it's dose function
                 # Time is guaranteed to be unique within a state so overwriting is fine
                 dose_groups[time][i] = dose.value
 
-        dose_functions = dict()
-        for (time, exprs) in dose_groups.items():
-            dose_functions[time] = lambdify(all_parameters, exprs)
-
-        # Dose times
-        dose_times = tuple(sorted(dose_groups.keys()))  # sorted distinct
-
         # Build event functions
-        event_function = tuple(lambdify(all_parameters, event.trigger) for event in events)
-
-        directions = np.asarray(tuple(event.direction.value for event in events))
-
-        effect_groups = []
-        for event in events:
-            effect_group = [state.name for state in states]
-            for effect in event.effects:
+        events = []
+        for event_object in event_objects:
+            trigger = event_object.trigger
+            direction = event_object.direction
+            effects = state_names.copy()
+            for effect in event_object.effects:
                 # TODO (drhagen): handle rare case of duplicate targets with additive effect
-                i_target = state_names.index(effect.target)
-                effect_group[i_target] = effect.value
-            effect_groups.append(effect_group)
-        effect_function = tuple(lambdify(all_parameters, effect) for effect in effect_groups)
+                i_target = state_names.index(str(effect.target))
+                effects[i_target] = effect.value
+            events.append((trigger, direction, effects))
 
         # Build output functions
-        # TODO (drhagen): handle the discontinuities
-        output_functions = dict()
+        output_syms = []
         for i, part in zip(active_constant_indexes, active_constants):
-            func = lambdify(all_parameters, part.name)
-            output_functions.update({i: func, part.name: func, str(part.name): func})
+            output_syms.append((i, str(part.name), part.name))
 
         for i, part in zip(inactive_constant_indexes, inactive_constants):
-            func = lambdify(all_parameters, part.value)
-            output_functions.update({i: func, part.name: func, str(part.name): func})
+            output_syms.append((i, str(part.name), part.value))
 
-        for i, part in zip(rule_indexes, rules):
-            func = lambdify(all_parameters, part.value.to_sympy())
-            output_functions.update({i: func, part.name: func, str(part.name): func})
+        for i, part in zip(rule_indexes, rule_objects):
+            output_syms.append((i, str(part.name), part.value.to_sympy()))
 
-        for i, part in zip(state_indexes, states):
-            func = lambdify(all_parameters, part.name)
-            output_functions.update({i: func, part.name: func, str(part.name): func})
+        for i, part in zip(state_indexes, state_objects):
+            output_syms.append((i, str(part.name), part.name))
 
-        return IntegrableSystem(n_parameters, n_states, parameter_values, initials_function, ode_function,
-                                jacobian_function, discontinuities, dose_functions, dose_times, event_function,
-                                directions, effect_function, output_functions)
+        output_syms.sort(key=lambda tup: tup[0])
 
-    def simulate(self, experiment: 'Experiment' = None):
+        outputs = OrderedDict((output[1], output[2]) for output in output_syms)
+
+        return IntegrableSystem(parameters, states, discontinuities, dose_groups, events, outputs)
+
+    def simulate(self, experiment: 'Experiment' = None, final_time=0.0, parameters: Sequence[str] = ()):
         from biolucia.experiment import InitialValueExperiment
         experiment = InitialValueExperiment() if experiment is None else experiment
-        return experiment.simulate(self)
+        return experiment.simulate(self, final_time=final_time, parameters=parameters)
 
     def observable_names(self):
         return tuple(str(part.name) for part in self.parts)
