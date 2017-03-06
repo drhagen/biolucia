@@ -1,7 +1,8 @@
 from numbers import Real
-from typing import Union, Sequence, Dict, Tuple
+from typing import Union, List
 
 import numpy as np
+from numpy import ndarray
 from scipy import sparse
 
 from .model import Model
@@ -11,10 +12,10 @@ from .ode import LazyIntegrableSolution
 class Simulation:
     """Abstract base class for simulations, which lazily produce values for all components at all
     time points 0 to infinity"""
-    def matrix_values(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str], None]=None):
+    def matrix_values(self, when: Union[Real, List[Real]], which: Union[str, List[str], None]=None) -> ndarray:
         raise NotImplementedError
 
-    def vector_values(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str]]):
+    def vector_values(self, when: Union[Real, List[Real]], which: Union[str, List[str]]) -> ndarray:
         when_unique, when_unique_indexes = np.unique(when, return_inverse=True)
         which_unique, which_unique_indexes = np.unique(which, return_inverse=True)
 
@@ -22,10 +23,10 @@ class Simulation:
 
         return result_matrix[when_unique_indexes, which_unique_indexes]
 
-    def matrix_sensitivities(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str], None]=None):
+    def matrix_sensitivities(self, when: Union[Real, List[Real]], which: Union[str, List[str], None]=None) -> ndarray:
         raise NotImplementedError
 
-    def vector_sensitivities(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str]]):
+    def vector_sensitivities(self, when: Union[Real, List[Real]], which: Union[str, List[str]]) -> ndarray:
         when_unique, when_unique_indexes = np.unique(when, return_inverse=True)
         which_unique, which_unique_indexes = np.unique(which, return_inverse=True)
 
@@ -33,10 +34,10 @@ class Simulation:
 
         return result_matrix[when_unique_indexes, which_unique_indexes, :]
 
-    def matrix_curvatures(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str], None]=None):
+    def matrix_curvatures(self, when: Union[Real, List[Real]], which: Union[str, List[str], None]=None) -> ndarray:
         raise NotImplementedError
 
-    def vector_curvatures(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str]]):
+    def vector_curvatures(self, when: Union[Real, List[Real]], which: Union[str, List[str]]) -> ndarray:
         when_unique, when_unique_indexes = np.unique(when, return_inverse=True)
         which_unique, which_unique_indexes = np.unique(which, return_inverse=True)
 
@@ -46,7 +47,7 @@ class Simulation:
 
 
 class BioluciaSystemSimulation(Simulation):
-    def __init__(self, system: Model, final_time: float = 0.0, parameters = ()):
+    def __init__(self, system: Model, final_time: float = 0.0, parameters: List[str] = ()):
         self._observable_names = system.observable_names()
         self.ode_system = system.build_odes(parameters)
         self.parameters = parameters
@@ -57,11 +58,12 @@ class BioluciaSystemSimulation(Simulation):
                                                self.ode_system.e_eff)
         self.solution.integrate_to(final_time)
 
+        # TODO: the rest of the model features
         self.sensitivities = LazyIntegrableSolution(self.ode_system.x0_dk.flatten(), self.odes_dk, self.jacobian_dk,
                                                     self.ode_system.discontinuities, [], [],
                                                     [], np.empty((0,)), [])
 
-    def matrix_values(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str]] = None):
+    def matrix_values(self, when: Union[Real, List[Real]], which: Union[str, List[str]] = None) -> ndarray:
         which = self._observable_names if which is None else which
 
         # Extract values from solution
@@ -90,20 +92,20 @@ class BioluciaSystemSimulation(Simulation):
             values = np.fromiter(values(), 'float', count=len(which)*len(when))
             return np.reshape(values, [len(when), len(which)])
 
-    def odes_dk(self, t, x_dk):
+    def odes_dk(self, t, x_dk) -> ndarray:
         nx = len(self.ode_system.x0)
         nk = len(self.ode_system.k)
         x = self.solution(t)
 
         return (self.ode_system.f_dx(t, x) @ x_dk.reshape(nx, nk) + self.ode_system.f_dk(t, x)).flatten()
 
-    def jacobian_dk(self, t, x_dk):
+    def jacobian_dk(self, t, x_dk) -> ndarray:
         nk = len(self.ode_system.k)
         x = self.solution(t)
 
         return sparse.kron(sparse.identity(nk), self.ode_system.f_dx(t, x), format='csc')
 
-    def matrix_sensitivities(self, when: Union[Real, Sequence[Real]], which: Union[str, Sequence[str], None] = None):
+    def matrix_sensitivities(self, when: Union[Real, List[Real]], which: Union[str, List[str], None] = None) -> ndarray:
         which = self._observable_names if which is None else which
 
         # Extract values from solution

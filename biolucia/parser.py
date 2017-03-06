@@ -18,7 +18,7 @@ class ModelParsers(TextParsers, whitespace=r'[ \t]*'):
         if func_name in sy.__dict__:
             func_handle = sy.__dict__[func_name]
         else:
-            raise ValueError('Function "{}" not found. Only functions in sympy.* may be used.'.format(func_name))
+            raise ValueError(f'Function "{func_name}" not found. Only functions in sympy.* may be used.')
         return func_handle(*arguments)
 
     function = name & '(' >> repsep(expression, ',') << ')' > make_function
@@ -209,7 +209,7 @@ def collapse_components(components):
                     else:
                         # Check that there is no overlap with any other non-additive segments of this rule
                         if non_additive_rule.has_overlap(element):
-                            raise ValueError('Rule {name} is mentioned multiple times'.format(name=name))
+                            raise ValueError(f'Rule {name} is mentioned multiple times')
                         else:
                             combined_expr = non_additive_rule.value + element.value
                             non_additive_rule = Rule(name, combined_expr)
@@ -220,7 +220,7 @@ def collapse_components(components):
                     if non_additive_initial is None:
                         non_additive_initial = element
                     else:
-                        raise ValueError('Initial {name} is mentioned multiple times'.format(name=name))
+                        raise ValueError(f'Initial {name} is mentioned multiple times')
                 else:
                     additive_initials.append(element)
             elif isinstance(element, Ode):
@@ -230,7 +230,7 @@ def collapse_components(components):
                     else:
                         # Check that there is no overlap with any other non-additive segments of this ODE
                         if non_additive_ode.has_overlap(element):
-                            raise ValueError('ODE {name} is mentioned multiple times'.format(name=name))
+                            raise ValueError(f'ODE {name} is mentioned multiple times')
                         else:
                             combined_expr = non_additive_ode.value + element.value
                             non_additive_ode = Ode(combined_expr)
@@ -245,7 +245,7 @@ def collapse_components(components):
         is_state = non_additive_initial or additive_initials or non_additive_ode or additive_odes or doses
 
         if is_state and is_rule:
-            raise ValueError('Part {name} is mentioned as both a rule and a state'.format(name=name))
+            raise ValueError(f'Part {name} is mentioned as both a rule and a state')
         elif is_rule:
             # This is a rule
             new_rule = reduce(lambda first, second: first + second, additive_rules, non_additive_rule)
@@ -259,9 +259,9 @@ def collapse_components(components):
         else:
             assert False  # Unreachable
 
-    return tuple(parts), tuple(events)
+    return parts, events
 
 
-def read_model(filename):
+def read_model(filename) -> Model:
     with open(filename) as file:
         return ModelParsers.model.parse(file.read()).or_die()

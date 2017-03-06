@@ -2,7 +2,7 @@ from numbers import Real
 from collections import OrderedDict
 from numpy import reshape, prod, ndarray
 from sympy import Expr, Symbol, lambdify
-from typing import Sequence, Dict, Callable, Tuple
+from typing import Sequence, Dict, Callable, Tuple, List, Union
 import numpy as np
 
 
@@ -46,8 +46,8 @@ import numpy as np
 #         return function
 
 
-def multidimensional_derivative(expressions: np.ndarray, symbols: Sequence['Symbol|str']):
-    if ~isinstance(expressions, np.ndarray):
+def multidimensional_derivative(expressions: Union[np.ndarray, List[Expr]], symbols: Sequence['Symbol|str']):
+    if not isinstance(expressions, np.ndarray):
         expressions = np.array(expressions, dtype=Expr)
 
     dimensions = expressions.shape + (len(symbols),)
@@ -65,11 +65,11 @@ def multidimensional_derivative(expressions: np.ndarray, symbols: Sequence['Symb
     return derivative
 
 
-def multidimensional_lambdify(variables, expression: ndarray):
-    shape = expression.shape
-    n = prod(shape)
-    expression = tuple(expression.reshape((n,)))  # tuple required because lambdify does not work on ndarray
+def multidimensional_lambdify(variables, expressions: ndarray):
+    shape = expressions.shape
+    n = expressions.size
+    expressions = list(expressions.reshape((n,)))  # list required because lambdify does not work on ndarray
 
-    function = lambdify(variables, expression)
+    function = lambdify(variables, expressions)
 
     return lambda *values: reshape(function(*values), shape)

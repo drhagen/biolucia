@@ -7,7 +7,7 @@ from numpy import log
 from numpy.random import normal
 from scipy.stats import multivariate_normal
 
-from .helpers import tau
+from math import tau
 from .simulation import Simulation
 
 

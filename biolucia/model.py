@@ -1,8 +1,8 @@
 from enum import IntEnum
 from collections import OrderedDict
-from typing import Sequence, Tuple, Union, Dict, List
+from typing import Tuple, Union, Dict, List, Callable
 
-from sympy import Expr, Piecewise, Symbol, lambdify, And, diff
+from sympy import Expr, Piecewise, Symbol, lambdify, And, diff, Float
 import numpy as np
 from numpy import inf, nan
 from itertools import permutations
@@ -13,16 +13,22 @@ from numbers import Real
 from .ode import IntegrableSystem
 
 
+def to_expression(expression: Union[Expr, str, Real]) -> Expr:
+    if isinstance(expression, str):
+        from biolucia.parser import ModelParsers
+        expression = ModelParsers.expression.parse(expression).or_die()
+    elif isinstance(expression, Real):
+        expression = Float(expression)
+    return expression
+
+
 class AnalyticSegment:
     def __init__(self, start: float, stop: float, expression: Union[Expr, Real, str]):
         self.start = start
         self.stop = stop
-        if isinstance(expression, str):
-            from biolucia.parser import ModelParsers
-            expression = ModelParsers.expression.parse(expression).or_die()
-        self.expression = expression  # type: Union[Expr, Real]
+        self.expression = to_expression(expression)
 
-    def contains(self, symbol: Union[Symbol, str]):
+    def contains(self, symbol: Union[Symbol, str]) -> bool:
         return self.expression.has(symbol)
 
     def __eq__(self, other):
@@ -42,11 +48,11 @@ class AnalyticSegment:
 
 
 class PiecewiseAnalytic:
-    def __init__(self, segments: Sequence[AnalyticSegment]):
+    def __init__(self, segments: List[AnalyticSegment]):
         # All parts must be non-overlapping and sorted
         self.segments = segments
         
-    def subs(self, replacers: Sequence[Tuple[str, Union['PiecewiseAnalytic', Real, Expr]]]):
+    def subs(self, replacers: List[Tuple[str, Union['PiecewiseAnalytic', Real, Expr]]]) -> 'PiecewiseAnalytic':
         old_segments = self.segments
         new_segments = []
         for name, replacer in replacers:
@@ -97,19 +103,19 @@ class PiecewiseAnalytic:
 
         return PiecewiseAnalytic(old_segments)
 
-    def contains(self, symbol: Union[Symbol, str]):
+    def contains(self, symbol: Union[Symbol, str]) -> bool:
         for segment in self.segments:
             if segment.contains(symbol):
                 return True
         return False
 
-    def evaluate(self, time: float):
+    def evaluate(self, time: float) -> Expr:
         for segment in self.segments:
             if segment.start <= time < segment.stop:
                 return segment.expression
-        return nan
+        return Float(nan)
 
-    def __add__(self, other: Union[Real, 'PiecewiseAnalytic']):
+    def __add__(self, other: Union[Real, 'PiecewiseAnalytic']) -> 'PiecewiseAnalytic':
         new_parts = []
 
         if isinstance(other, Real):
@@ -172,7 +178,7 @@ class PiecewiseAnalytic:
 
         return PiecewiseAnalytic(new_parts)
 
-    def has_overlap(self, other: 'PiecewiseAnalytic'):
+    def has_overlap(self, other: 'PiecewiseAnalytic') -> bool:
         # TODO (drhagen): use the smart ordered looping from subs
         for segment_i in self.segments:
             for segment_j in other.segments:
@@ -182,7 +188,7 @@ class PiecewiseAnalytic:
                     return True
         return False
 
-    def diff(self, symbol: Union[Symbol, str]):
+    def diff(self, symbol: Union[Symbol, str]) -> 'PiecewiseAnalytic':
         new_segments = []
 
         for segment in self.segments:
@@ -196,12 +202,9 @@ class PiecewiseAnalytic:
         return PiecewiseAnalytic(new_segments)
 
     @staticmethod
-    def convert(obj: Union[str, Real, Expr, AnalyticSegment, 'PiecewiseAnalytic']):
-        if isinstance(obj, str):
+    def convert(obj: Union[str, Real, Expr, AnalyticSegment, 'PiecewiseAnalytic']) -> 'PiecewiseAnalytic':
+        if isinstance(obj, (Expr, Real, str)):
             from biolucia.parser import ModelParsers
-            value = PiecewiseAnalytic([AnalyticSegment(-inf, inf, ModelParsers.expression.parse(obj).or_die())])
-            # TODO (drhagen): make this actually parse piecewise
-        elif isinstance(obj, Expr) or isinstance(obj, Real):
             value = PiecewiseAnalytic([AnalyticSegment(-inf, inf, obj)])
             # TODO (drhagen): make this actually parse piecewise
         elif isinstance(obj, AnalyticSegment):
@@ -209,13 +212,13 @@ class PiecewiseAnalytic:
         elif isinstance(obj, PiecewiseAnalytic):
             value = obj
         else:
-            raise ValueError('Object of type {} cannot be converted to PiecewiseAnalytic'.format(type(obj)))
+            raise ValueError(f'Object of type {type(obj)} cannot be converted to PiecewiseAnalytic')
         return value
 
-    def to_function(self, variables: Sequence[Union[str, Symbol]]):
+    def to_function(self, variables: List[Union[str, Symbol]]) -> Callable[..., float]:
         return lambdify(variables, self.to_sympy())
 
-    def to_sympy(self):
+    def to_sympy(self) -> Piecewise:
         t = Symbol('t')
 
         pieces = []
@@ -235,8 +238,8 @@ class PiecewiseAnalytic:
         return Piecewise(*pieces)
 
     @property
-    def discontinuities(self):
-        return (time for part in self.segments for time in (part.start, part.stop) if -inf < time < inf)
+    def discontinuities(self) -> List[float]:
+        return [time for part in self.segments for time in (part.start, part.stop) if -inf < time < inf]
 
     def __eq__(self, other: 'PiecewiseAnalytic'):
         return self.segments == other.segments
@@ -249,23 +252,21 @@ class PiecewiseAnalytic:
 
 class Effect:
     def __init__(self, target: Union[str, Symbol], value: Union[PiecewiseAnalytic, Expr, str]):
-        if isinstance(target, str):
-            target = Symbol(target)
+        if isinstance(target, Symbol):
+            target = str(target)
         self.target = target
         self.value = PiecewiseAnalytic.convert(value)
 
-    def subs(self, components: Sequence[Union['Rule', 'Constant']]):
-        if isinstance(self.value, Real):
-            return self
-        else:
-            replacers = [(component.name, component.evaluate(0)) for component in components]
-            return Effect(self.target, self.value.subs(replacers))
+    def subs(self, components: List[Union['Rule', 'Constant']]) -> 'Effect':
+        # TODO: what is this evalute(0) doing?
+        replacers = [(component.name, component.evaluate(0)) for component in components]
+        return Effect(self.target, self.value.subs(replacers))
 
     def __eq__(self, other):
         return self.target == other.target and self.value == other.value
 
     def __str__(self):
-        return '{name} = {value}'.format(name=self.target, value=self.value)
+        return f'{self.target} = {self.value}'
 
     __repr__ = __str__
 
@@ -277,55 +278,56 @@ class EventDirection(IntEnum):
 
 class Event:
     def __init__(self, trigger: Union[PiecewiseAnalytic, Expr, str], direction: EventDirection, include_jumps: bool,
-                 effects: Sequence[Effect]):
+                 effects: List[Effect]):
         self.trigger = PiecewiseAnalytic.convert(trigger)
         self.direction = direction
         self.include_jumps = include_jumps
         self.effects = effects
 
-    def subs(self, components: Sequence[Union['Rule', 'Constant']]):
+    def subs(self, components: List[Union['Rule', 'Constant']]) -> 'Event':
+        # TODO: what is this evalute(0) doing?
         replacers = [(component.name, component.evaluate(0)) for component in components]
         new_trigger = self.trigger.subs(replacers)
         new_effects = [effect.subs(components) for effect in self.effects]
         return Event(new_trigger, self.direction, self.include_jumps, new_effects)
 
     def __eq__(self, other):
-        return self.trigger == other.trigger and self.direction == other.direction \
-               and self.include_jumps == other.include_jumps and self.effects == other.effects
+        return (self.trigger == other.trigger and self.direction == other.direction
+                and self.include_jumps == other.include_jumps and self.effects == other.effects)
 
     def __str__(self):
         dir_str = '<' if self.direction == EventDirection else '>'
-        return '@({trigger} < 0) '.format(trigger=self.trigger, dir=dir_str) \
-               + ', '.join([str(effect) for effect in self.effects])
+        return f'@({self.trigger} {dir_str} 0) ' + ', '.join([str(effect) for effect in self.effects])
 
     __repr__ = __str__
 
 
 class Initial:
     def __init__(self, value: Union[Expr, Real, str], additive: bool = False):
-        self.value = parse_expr(value) if isinstance(value, str) else value
+        self.value = to_expression(value)
         self.additive = additive
 
-    def subs(self, components: Sequence[Union['Rule', 'Constant']]):
-        if isinstance(self.value, Real):
-            return self
-        else:
-            replacers = [(component.name, component.evaluate(0)) for component in components]
-            return Initial(self.value.subs(replacers), self.additive)
+    def subs(self, components: List[Union['Rule', 'Constant']]) -> 'Initial':
+        # TODO: what is this evalute(0) doing?
+        replacers = [(component.name, component.evaluate(0)) for component in components]
+        return Initial(self.value.subs(replacers), self.additive)
 
     def __eq__(self, other):
         return self.value == other.value and self.additive == other.additive
 
-    def __repr__(self):
-        return "* {eq} {value}".format(eq="+=" if self.additive else "=", value=self.value)
+    def __str__(self):
+        eq_str = '+=' if self.additive else '='
+        return f'* {eq_str} {self.value}'
+
+    __repr__ = __str__
 
 
 class Dose:
     def __init__(self, time: float, value: Union[Expr, Real, str]):
         self.time = time
-        self.value = parse_expr(value) if isinstance(value, str) else value
+        self.value: Expr = parse_expr(value) if isinstance(value, str) else value
 
-    def subs(self, components: Sequence[Union['Rule', 'Constant']]):
+    def subs(self, components: List[Union['Rule', 'Constant']]):
         if isinstance(self.value, Real):
             return self
         else:
@@ -335,8 +337,10 @@ class Dose:
     def __eq__(self, other):
         return self.time == other.time and self.value == other.value
 
-    def __repr__(self):
-        return "({time}) = {value}".format(time=self.time, value=self.value)
+    def __str__(self):
+        return f'({self.time}) = {self.value}'
+
+    __repr__ = __str__
 
 
 class Ode:
@@ -344,11 +348,11 @@ class Ode:
         self.value = PiecewiseAnalytic.convert(value)
         self.additive = additive
 
-    def subs(self, components: Sequence[Union['Rule', 'Constant']]):
+    def subs(self, components: List[Union['Rule', 'Constant']]) -> 'Ode':
         replacers = [(rule.name, rule.value) for rule in components]
         return Ode(self.value.subs(replacers), self.additive)
 
-    def has_overlap(self, other: 'Ode'):
+    def has_overlap(self, other: 'Ode') -> bool:
         if isinstance(other, Constant):
             return True
         else:
@@ -357,32 +361,35 @@ class Ode:
     def __eq__(self, other):
         return self.value == other.value
 
-    def __repr__(self):
-        return "' {eq} {value}".format(eq="+=" if self.additive else "=", value=self.value)
+    def __str__(self):
+        eq_str = '+=' if self.additive else '='
+        return f"' {eq_str} {self.value}"
+
+    __repr__ = __str__
 
 
 class Component:
     def __init__(self, name: Union[Symbol, str]):
-        if isinstance(name, str):
-            name = Symbol(name)
+        if isinstance(name, Symbol):
+            name = name.name
         self.name = name
 
-    def contains(self, other: str):
+    def contains(self, other: str) -> bool:
         raise NotImplementedError
 
-    def subs(self, components: Sequence[Union['Rule', 'Constant']]):
+    def subs(self, components: List[Union['Rule', 'Constant']]) -> 'Component':
         raise NotImplementedError
 
-    def evaluate(self, time: float):
+    def evaluate(self, time: float) -> Expr:
         raise NotImplementedError
 
     @staticmethod
-    def parse(component: str):
+    def parse(component: str) -> 'Component':
         from biolucia.parser import ModelParsers  # Circular import
         return ModelParsers.component.parse(component).or_die()
 
     @staticmethod
-    def topological_sort(components: Sequence[Union['Rule', 'Constant']]):
+    def topological_sort(components: List[Union['Rule', 'Constant']]) -> 'List[Component]':
         # Returns a list of components sorted so that no element contains an element earlier in the list
 
         n_components = len(components)
@@ -402,19 +409,19 @@ class Constant(Component):
         self.value = value
         self.additive = additive
 
-    def contains(self, other: str):
+    def contains(self, other: str) -> bool:
         return False
 
-    def subs(self, components: Sequence[Union['Rule', 'Constant']]):
+    def subs(self, components: List[Union['Rule', 'Constant']]) -> 'Constant':
         return self
 
-    def evaluate(self, time: float):
+    def evaluate(self, time: float) -> float:
         return self.value
 
-    def has_overlap(self, other: Union['Constant', 'Rule']):
+    def has_overlap(self, other: Union['Constant', 'Rule']) -> bool:
         return True
 
-    def copy(self, name: Union[Symbol, str] = None, value: float = None, additive: bool = None):
+    def copy(self, name: Union[Symbol, str] = None, value: float = None, additive: bool = None) -> 'Constant':
         if name is None:
             name = self.name
 
@@ -430,7 +437,8 @@ class Constant(Component):
         return self.name == other.name and self.value == other.value
 
     def __repr__(self):
-        return '{name} {eq} {value}'.format(name=self.name, eq="+=" if self.additive else "=", value=self.value)
+        eq_str = '+=' if self.additive else '='
+        return f'{self.name} {eq_str} {self.value}'
 
 
 class Rule(Component):
@@ -440,20 +448,17 @@ class Rule(Component):
         self.value = PiecewiseAnalytic.convert(value)
         self.additive = additive
 
-    def subs(self, components: Sequence[Union['Rule', 'Constant']]):
-        if isinstance(self.value, Real):
-            return self
-        else:
-            replacers = [(rule.name, rule.value) for rule in components]
-            return Rule(self.name, self.value.subs(replacers), self.additive)
+    def subs(self, components: List[Union['Rule', 'Constant']]) -> 'Rule':
+        replacers = [(rule.name, rule.value) for rule in components]
+        return Rule(self.name, self.value.subs(replacers), self.additive)
 
-    def contains(self, symbol: str):
+    def contains(self, symbol: str) -> bool:
         return self.value.contains(symbol)
 
-    def evaluate(self, time: float):
+    def evaluate(self, time: float) -> float:
         return self.value.evaluate(time)
 
-    def has_overlap(self, other: Union['Constant', 'Rule']):
+    def has_overlap(self, other: Union['Constant', 'Rule']) -> bool:
         if isinstance(other, Constant):
             return True
         else:
@@ -463,26 +468,27 @@ class Rule(Component):
         return self.name == other.name and self.value == other.value
 
     def __repr__(self):
-        return '{name} {eq} {value}'.format(name=self.name, eq="+=" if self.additive else "=", value=self.value)
+        eq_str = '+=' if self.additive else '='
+        return f'{self.name} {eq_str} {self.value}'
 
 
 class State(Component):
-    def __init__(self, name: Union[Symbol, str], initial: Initial, doses: Sequence[Dose], ode: Ode):
+    def __init__(self, name: Union[Symbol, str], initial: Initial, doses: List[Dose], ode: Ode):
         super().__init__(name)
         self.initial = initial
         self.doses = doses
         self.ode = ode
 
-    def subs(self, components: Sequence[Union['Rule', 'Constant']]):
+    def subs(self, components: List[Union['Rule', 'Constant']]) -> 'State':
         new_initial = self.initial.subs(components)
         new_doses = [dose.subs(components) for dose in self.doses]
         new_ode = self.ode.subs(components)
         return State(self.name, new_initial, new_doses, new_ode)
 
-    def add_dose(self, dose):
-        return self.copy(doses=self.doses + (dose,))
+    def add_dose(self, dose: Dose) -> 'State':
+        return self.copy(doses=self.doses + [dose])
 
-    def copy(self, name: str = None, initial: Initial = None, doses: Sequence[Dose] = None, ode: Ode = None):
+    def copy(self, name: str = None, initial: Initial = None, doses: List[Dose] = None, ode: Ode = None) -> 'State':
         if name is None:
             name = self.name
 
@@ -502,18 +508,21 @@ class State(Component):
                 self.ode == other.ode)
 
     def __repr__(self):
-        return '{name}{initial}  {name}{ode}'.format(name=self.name, initial=self.initial, ode=self.ode)
+        return f'{self.name}{self.initial}  {self.name}{self.ode}'
 
 
 class Model:
-    def __init__(self, parts: Sequence[Component] = (), events: Sequence[Event] = ()):
-        parts = tuple(parts)  # type: Sequence[Component]
-        events = tuple(events)  # type: Sequence[Event]
+    def __init__(self, parts: List[Component] = (), events: List[Event] = ()):
+        if not isinstance(parts, list):
+            parts = list(parts)
+            
+        if not isinstance(events, list):
+            events = list(events)
 
         self.parts = parts
         self.events = events
 
-    def copy(self, parts: Sequence[Component] = None, events: Sequence[Event] = None):
+    def copy(self, parts: List[Component] = None, events: List[Event] = None) -> 'Model':
         if parts is None:
             parts = self.parts
 
@@ -522,7 +531,7 @@ class Model:
 
         return Model(parts, events)
 
-    def add(self, *items: Union[Sequence[Component], Sequence[Event], Sequence[str]]):
+    def add(self, *items: Union[List[Component], List[Event], List[str]]) -> 'Model':
         from biolucia.parser import collapse_components
 
         ready_parts = []
@@ -538,18 +547,18 @@ class Model:
 
         parsed_parts, parsed_events = collapse_components(parsed_components)
 
-        return self.copy(parts=self.parts + tuple(ready_parts) + parsed_parts,
-                         events=self.events + tuple(ready_events) + parsed_events)
+        return self.copy(parts=self.parts + ready_parts + parsed_parts,
+                         events=self.events + ready_events + parsed_events)
 
-    def __getitem__(self, name: Union[Symbol, str]):
-        if isinstance(name, str):
-            name = Symbol(name)
+    def __getitem__(self, name: Union[Symbol, str]) -> Component:
+        if isinstance(name, Symbol):
+            name = name.name
 
         name_map = dict((part.name, part) for part in self.parts)
 
         return name_map[name]
 
-    def update(self, variant: 'Model'):
+    def update(self, variant: 'Model') -> 'Model':
         if not variant.parts and not variant.events:  # Don't update if there is nothing to update
             return self
 
@@ -593,8 +602,9 @@ class Model:
 
                     new_parts[index] = State(old_part.name, new_initial, new_doses, new_ode)
                 else:
-                    raise ValueError('Component {name} has type {type1} and cannot be added with type {type2}'
-                                     .format(name=new_part.name, type1=type(old_part), type2=type(new_part)))
+                    raise ValueError(f'Component {new_part.name} has type {type(old_part)}'
+                                     f' and cannot be added with type {type(new_part)}')
+
             else:
                 new_parts.append(new_part)
 
@@ -603,31 +613,31 @@ class Model:
 
         return Model(new_parts, new_events)
 
-    def default_parameters(self):
-        parameters = []  # List[Tuple[str, float]]
+    def default_parameters(self) -> Dict[str, float]:
+        parameters: List[Tuple[str, float]] = []
 
         for part in self.parts:
             if isinstance(part, Constant):
-                parameters.append((str(part.name), part.value))
+                parameters.append((part.name, part.value))
 
         return OrderedDict(parameters)
 
-    def update_parameters(self, parameters: Dict[str, float]):
+    def update_parameters(self, parameters: Dict[str, float]) -> 'Model':
         new_parts = []
 
         for part in self.parts:
-            if str(part.name) in parameters:
+            if part.name in parameters:
                 if isinstance(part, Constant):
-                    new_parts.append(part.copy(value=parameters[str(part.name)]))
+                    new_parts.append(part.copy(value=parameters[part.name]))
                 else:
-                    raise ValueError('Part {} cannot be a parameter because it is not a Constant'.format(part.name))
+                    raise ValueError(f'Part {part.name} cannot be a parameter because it is not a Constant')
             else:
                 new_parts.append(part)
 
         return self.copy(parts=new_parts)
 
     # TODO: memoize this
-    def build_odes(self, parameter_names: Sequence[str] = ()):
+    def build_odes(self, parameter_names: List[str] = ()) -> IntegrableSystem:
         parameter_names = list(parameter_names)
 
         active_constant_indexes = []
@@ -641,7 +651,7 @@ class Model:
 
         for i, part in enumerate(self.parts):
             if isinstance(part, Constant):
-                if str(part.name) in parameter_names:
+                if part.name in parameter_names:
                     active_constant_indexes.append(i)
                     active_constants.append(part)
                 else:
@@ -656,7 +666,7 @@ class Model:
 
         event_objects = self.events
 
-        state_names = [str(state.name) for state in state_objects]
+        state_names = [state.name for state in state_objects]
 
         # Substitute constants and rules into rules
         rule_objects = Rule.topological_sort(rule_objects)
@@ -691,7 +701,7 @@ class Model:
                 time = dose.time
                 if time not in dose_groups:
                     # Initialize a dose at this time
-                    dose_groups[time] = [state.name for state in state_objects]  # list is going to be mutated
+                    dose_groups[time] = [Symbol(state.name) for state in state_objects]  # list is going to be mutated
 
                 # Replace the zero at the state's index with it's dose function
                 # Time is guaranteed to be unique within a state so overwriting is fine
@@ -710,18 +720,18 @@ class Model:
             events.append((trigger, direction, effects))
 
         # Build output functions
-        output_syms = []
+        output_syms: List[Tuple[int, str, Expr]] = []
         for i, part in zip(active_constant_indexes, active_constants):
-            output_syms.append((i, str(part.name), part.name))
+            output_syms.append((i, part.name, Symbol(part.name)))
 
         for i, part in zip(inactive_constant_indexes, inactive_constants):
-            output_syms.append((i, str(part.name), part.value))
+            output_syms.append((i, part.name, part.value))
 
         for i, part in zip(rule_indexes, rule_objects):
-            output_syms.append((i, str(part.name), part.value.to_sympy()))
+            output_syms.append((i, part.name, part.value.to_sympy()))
 
         for i, part in zip(state_indexes, state_objects):
-            output_syms.append((i, str(part.name), part.name))
+            output_syms.append((i, part.name, Symbol(part.name)))
 
         output_syms.sort(key=lambda tup: tup[0])
 
@@ -729,10 +739,11 @@ class Model:
 
         return IntegrableSystem(parameters, states, discontinuities, dose_groups, events, outputs)
 
-    def simulate(self, experiment: 'Experiment' = None, final_time=0.0, parameters: Sequence[str] = ()):
-        from biolucia.experiment import InitialValueExperiment
+    def simulate(self, experiment: 'Experiment' = None, final_time=0.0, parameters: List[str] = ()) -> \
+            '.simulation.Simulation':
+        from .experiment import InitialValueExperiment
         experiment = InitialValueExperiment() if experiment is None else experiment
         return experiment.simulate(self, final_time=final_time, parameters=parameters)
 
-    def observable_names(self):
-        return tuple(str(part.name) for part in self.parts)
+    def observable_names(self) -> List[str]:
+        return [part.name for part in self.parts]

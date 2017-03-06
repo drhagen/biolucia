@@ -1,7 +1,8 @@
-from typing import List, Union, Sequence
+from typing import Union, List
 from collections import OrderedDict
 
 import numpy as np
+from numpy import ndarray
 from scipy.optimize import minimize
 
 from .model import Model
@@ -10,7 +11,8 @@ from .observation import Objective
 
 
 class ActiveParameters:
-    def __init__(self, model_parameters: 'OrderedDict[str, float]', experiment_parameters: 'Sequence[OrderedDict[str, float]]'):
+    def __init__(self, model_parameters: 'OrderedDict[str, float]',
+                 experiment_parameters: 'List[OrderedDict[str, float]]'):
         if isinstance(model_parameters, OrderedDict):
             pass
         elif isinstance(model_parameters, dict):
@@ -21,11 +23,11 @@ class ActiveParameters:
         elif isinstance(experiment_parameters, dict):
             experiment_parameters = [OrderedDict(experiment_parameters)]
 
-        self.model_parameters = model_parameters  # type: OrderedDict[str, float]
-        self.experiment_parameters = experiment_parameters  # type: List[OrderedDict[str, float]]
+        self.model_parameters: 'OrderedDict[str, float]' = model_parameters
+        self.experiment_parameters: 'List[OrderedDict[str, float]]' = experiment_parameters
 
     @property
-    def values(self) -> np.array:
+    def values(self) -> ndarray:
         k = list(self.model_parameters.values())
 
         for experiment in self.experiment_parameters:
@@ -33,13 +35,13 @@ class ActiveParameters:
 
         return np.asarray(k)
 
-    def update_parameters(self, values: np.array):
+    def update_parameters(self, values: ndarray) -> 'ActiveParameters':
         n_model_parameters = len(self.model_parameters)
         n_experiment_parameters = [len(exp_i) for exp_i in self.experiment_parameters]
         n_parameters = n_model_parameters + sum(n_experiment_parameters)
 
         if len(values) != n_parameters:
-            raise ValueError('{} parameters required, but {} received'.format(n_parameters, len(values)))
+            raise ValueError(f'{n_parameters} parameters required, but {len(values)} received')
 
         model_parameters = []
         for name_i, i_parameter in zip(self.model_parameters.keys(), range(n_model_parameters)):
@@ -60,7 +62,8 @@ class ActiveParameters:
         return ActiveParameters(model_parameters, experiment_parameters)
 
     @staticmethod
-    def from_model_experiments(model, experiment, model_parameter_names, experiment_parameter_names):
+    def from_model_experiments(model, experiment, model_parameter_names, experiment_parameter_names) \
+            -> 'ActiveParameters':
         default_model_parameters = model.default_parameters()
         active_model_parameters = OrderedDict((name, default_model_parameters[name]) for name in model_parameter_names)
 
@@ -75,7 +78,7 @@ class ActiveParameters:
 
         return ActiveParameters(active_model_parameters, active_experiment_parameters)
 
-    def __eq__(self, other):
+    def __eq__(self, other: 'ActiveParameters'):
         if isinstance(other, ActiveParameters):
             return (self.model_parameters == other.model_parameters
                     and self.experiment_parameters == other.experiment_parameters)
@@ -83,11 +86,11 @@ class ActiveParameters:
             return NotImplemented
 
     def __repr__(self):
-        return 'ActiveParameters({}, {})'.format(self.model_parameters, self.experiment_parameters)
+        return f'ActiveParameters({self.model_parameters}, {self.experiment_parameters})'
 
 
-def fit_parameters(model: Model, experiments: Union[Experiment, Sequence[Experiment]], objectives: Objective, *,
-                   model_parameters, experiment_parameters=()):
+def fit_parameters(model: Model, experiments: Union[Experiment, List[Experiment]], objectives: Objective, *,
+                   model_parameters, experiment_parameters=()) -> ActiveParameters:
     if isinstance(experiments, Experiment):
         experiments = [experiments]
 
