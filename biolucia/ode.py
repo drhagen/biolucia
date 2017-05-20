@@ -6,8 +6,8 @@ import copy
 
 import numpy as np
 from numpy import inf, array
-from scipy_ode import Radau
-from scipy_ode.ivp import find_active_events, solve_event_equation
+from scipy.integrate import Radau
+from scipy.integrate._ivp.ivp import find_active_events, solve_event_equation
 
 from .analytic import multidimensional_derivative, multidimensional_lambdify
 
