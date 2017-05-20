@@ -5,9 +5,10 @@ import numpy as np
 from numpy import ndarray
 from scipy.optimize import minimize
 
-from .model import Model
-from .experiment import Experiment
-from .observation import Objective
+from biolucia.model import Model
+from biolucia.experiment import Experiment
+from biolucia.observation import Objective
+from biolucia.simulation import simulate
 
 
 class ActiveParameters:
@@ -106,7 +107,7 @@ def fit_parameters(model: Model, experiments: Union[Experiment, List[Experiment]
         for experiment_i, objective_i, experiment_parameters_i in zip(experiments, objectives,
                                                                       active_parameters.experiment_parameters):
             experiment_i = experiment_i.update_parameters(experiment_parameters_i)
-            sim_i = model.simulate(experiment_i)
+            sim_i = simulate(model, experiment_i)
             G = G + objective_i.G(sim_i)
 
         return G

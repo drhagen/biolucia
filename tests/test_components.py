@@ -120,11 +120,11 @@ class OdeBuildingTestCase(unittest.TestCase):
 
         system = m.build_odes()
 
-        self.assertTrue(np.array_equal(system.ics(), [10, 5, 0]))
-        self.assertTrue(np.array_equal(system.odes(0, system.ics()), [-25, -25, 25]))
+        self.assertTrue(np.array_equal(system.x0, [10, 5, 0]))
+        self.assertTrue(np.array_equal(system.f(0, system.x0), [-25, -25, 25]))
 
         real_jacobian = [[-2.5, -5.0, 0.2], [-2.5, -5.0, 0.2], [2.5, 5.0, -0.2]]
-        self.assertTrue(np.array_equal(system.jacobian(0, system.ics()), real_jacobian))
+        self.assertTrue(np.array_equal(system.f_dx(0, system.x0), real_jacobian))
 
 
 class ParameterUpdatingTestCase(unittest.TestCase):

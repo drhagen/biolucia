@@ -5,7 +5,7 @@ from biolucia.model import Model
 from biolucia.experiment import InitialValueExperiment
 from biolucia.fitting import ActiveParameters, fit_parameters
 from biolucia.observation import LinearWeightedSumOfSquaresObservation, AffineMeasurementUncertainty
-from .test_models import equilibrium_model, equilibrium_dose_variant
+from test_models import equilibrium_model, equilibrium_dose_variant
 
 
 class ActiveParametersTestCase(TestCase):

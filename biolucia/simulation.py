@@ -5,7 +5,10 @@ import numpy as np
 from numpy import ndarray
 from scipy import sparse
 
+from multipledispatch import Dispatcher
+
 from .model import Model
+from .experiment import Experiment, InitialValueExperiment, SteadyStateExperiment
 from .ode import LazyIntegrableSolution
 
 
@@ -140,3 +143,33 @@ class BioluciaSystemSimulation(Simulation):
                                                    @ sensitivities
                                                    + self.ode_system.y_dk(which[i_which], when[i_when], states))
             return outputs
+
+
+# Multiple dispatch contraption for simulate
+def simulate(model: Model, experiments: Union[Experiment, List[Experiment]], **kwargs):
+    if isinstance(experiments, Experiment):
+        return simulate.dispatcher(model, experiments, **kwargs)
+    else:
+        return [simulate.dispatcher(model, experiment, **kwargs) for experiment in experiments]
+
+simulate.dispatcher = Dispatcher('simulate')
+
+
+@simulate.dispatcher.register(Model, InitialValueExperiment)
+def simulate_analytic_initial(model: Model, experiment: InitialValueExperiment, *,
+                              final_time: float = 0.0, parameters: List[str] = ()):
+    system = model.update(experiment.variant)
+    return BioluciaSystemSimulation(system, final_time, parameters)
+
+
+@simulate.dispatcher.register(Model, SteadyStateExperiment)
+def simulate_analytic_steady_state(model: Model, experiment: SteadyStateExperiment, *,
+                                   final_time: float = 0.0, parameters: List[str] = ()):
+    starter = model.update(experiment.starter)
+    system = model.update(experiment.variant)
+
+    # TODO: or something like this...
+    starter = run_to_steady_state(starter)
+    system = system.update_initial(starter)
+
+    return BioluciaSystemSimulation(system, final_time, parameters)

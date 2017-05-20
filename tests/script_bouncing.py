@@ -1,10 +1,13 @@
 from biolucia.parser import *
+from biolucia.experiment import InitialValueExperiment
+from biolucia.simulation import simulate
 import matplotlib.pyplot as plt
 import numpy as np
 
 filename = '../models/bouncing.txt'
 m = read_model(filename)
-sim = m.simulate()
+con = InitialValueExperiment()
+sim = simulate(m, con)
 
 times = np.linspace(0, 100, 1000)
 values = sim.matrix_values(times, 'x')

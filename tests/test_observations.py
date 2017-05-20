@@ -6,6 +6,7 @@ from numpy.testing import assert_allclose
 from biolucia.model import *
 from biolucia.experiment import InitialValueExperiment
 from biolucia.observation import LinearWeightedSumOfSquaresObservation, AffineMeasurementUncertainty
+from biolucia.simulation import simulate
 
 from tests.test_models import equilibrium_model
 
@@ -30,13 +31,13 @@ def assert_log_probability_dk(m, con, obs, measurements, **kwargs):
     def fun(k):
         ks_updated = OrderedDict(zip(m.default_parameters().keys(), k))
         m_updated = m.update_parameters(ks_updated)
-        sim_updated = m_updated.simulate(con, parameters=m.default_parameters())
+        sim_updated = simulate(m_updated, con, parameters=m.default_parameters())
         return obs.log_probability(sim_updated, measurements)
 
     def jac(k):
         ks_updated = OrderedDict(zip(m.default_parameters().keys(), k))
         m_updated = m.update_parameters(ks_updated)
-        sim_updated = m_updated.simulate(con, parameters=m.default_parameters())
+        sim_updated = simulate(m_updated, con, parameters=m.default_parameters())
         return obs.log_probability_dk(sim_updated, measurements)
 
     assert_finite_difference_almost_equal(fun, jac, [*m.default_parameters().values()], **kwargs)
@@ -47,7 +48,7 @@ class ObservationTestCase(unittest.TestCase):
         m = equilibrium_model()
         con = InitialValueExperiment()
 
-        sim = m.simulate(con)
+        sim = simulate(m, con)
 
         unc = AffineMeasurementUncertainty(2, 0)
 

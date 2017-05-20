@@ -1,9 +1,9 @@
 import unittest
-import numpy as np
 from numpy.testing import assert_allclose
 
 from biolucia.model import *
 from biolucia.experiment import InitialValueExperiment
+from biolucia.simulation import simulate
 
 from tests.test_models import equilibrium_model, equilibrium_dose_variant, dose_step
 
@@ -13,7 +13,7 @@ class SimulateTestCase(unittest.TestCase):
         m = equilibrium_model()
         con = InitialValueExperiment()
 
-        sim = m.simulate(con)
+        sim = simulate(m, con)
 
         self.assertEqual(sim.vector_values(0, 'A'), m['A0'].value)
         assert_allclose(sim.vector_values(0, ['A', 'A0']), [m['A0'].value, m['A0'].value])
@@ -30,7 +30,7 @@ class SimulateTestCase(unittest.TestCase):
         m = equilibrium_model()
         con = InitialValueExperiment()
 
-        sim = m.simulate(con, parameters=['A0', 'kr'])
+        sim = simulate(m, con, parameters=['A0', 'kr'])
 
         assert_allclose(sim.matrix_sensitivities(0.0, 'A'), [1.0, 0.0])
         self.assertEqual(sim.matrix_sensitivities(0.0, 'A').shape, (2,))
@@ -46,7 +46,7 @@ class SimulateTestCase(unittest.TestCase):
         m = equilibrium_model()
         con = InitialValueExperiment(equilibrium_dose_variant())
 
-        sim = m.simulate(con)
+        sim = simulate(m, con)
 
         self.assertEqual(sim.matrix_values(0, 'kf'), 0.5)
         self.assertEqual(sim.matrix_values(0, 'A'), 10)
@@ -54,8 +54,9 @@ class SimulateTestCase(unittest.TestCase):
 
     def test_simulate_dose(self):
         m = dose_step()
+        con = InitialValueExperiment()
 
-        sim = m.simulate()
+        sim = simulate(m, con)
 
         self.assertEqual(sim.matrix_values(0, 'A'), 0.0)
         self.assertEqual(sim.matrix_values(1, 'A'), 2.0)
@@ -65,8 +66,9 @@ class SimulateTestCase(unittest.TestCase):
     def test_events(self):
         m = Model()
         m = m.add("A* = 0", "A' = 1", "@(A > 1) A = 0")
+        con = InitialValueExperiment()
 
-        sim = m.simulate()
+        sim = simulate(m, con)
 
         self.assertTrue(0.9 < sim.matrix_values(0.95, 'A') < 1)
         self.assertTrue(0 < sim.matrix_values(1.05, 'A') < 0.1)
@@ -75,8 +77,9 @@ class SimulateTestCase(unittest.TestCase):
 
     def test_empty(self):
         m = Model()
+        con = InitialValueExperiment()
 
-        sim = m.simulate()
+        sim = simulate(m, con)
 
         self.assertEqual(sim.matrix_values(10).shape, (0,))
         self.assertEqual(sim.matrix_values([10, 20]).shape, (2, 0))
@@ -85,6 +88,6 @@ class SimulateTestCase(unittest.TestCase):
         m = equilibrium_model()
         con = InitialValueExperiment(Model().add('@(B < 2) B = 0'))
 
-        sim = m.simulate(con)
+        sim = simulate(m, con)
 
         self.assertTrue(sim.matrix_values(0.7, 'B') < 1)

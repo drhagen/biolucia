@@ -739,11 +739,5 @@ class Model:
 
         return IntegrableSystem(parameters, states, discontinuities, dose_groups, events, outputs)
 
-    def simulate(self, experiment: 'Experiment' = None, final_time=0.0, parameters: List[str] = ()) -> \
-            '.simulation.Simulation':
-        from .experiment import InitialValueExperiment
-        experiment = InitialValueExperiment() if experiment is None else experiment
-        return experiment.simulate(self, final_time=final_time, parameters=parameters)
-
     def observable_names(self) -> List[str]:
         return [part.name for part in self.parts]
