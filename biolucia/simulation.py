@@ -7,16 +7,17 @@ from scipy import sparse
 
 from multipledispatch import Dispatcher
 
-from .model import Model
+from .model import Model, update
 from .experiment import Experiment, InitialValueExperiment, SteadyStateExperiment
-from .ode import LazyIntegrableSolution
+from .ode import LazyIntegrableSolution, ListDiscontinuitySupplier, ListDoseSupplier, LazyIntegrableSolutionDoseSupplier
 
 
 class Simulation:
     """Abstract base class for simulations, which lazily produce values for all components at all
     time points 0 to infinity"""
-    def matrix_values(self, when: Union[Real, List[Real]], which: Union[str, List[str], None]=None) -> ndarray:
-        raise NotImplementedError
+
+    def matrix_values(self, when: Union[Real, List[Real]], which: Union[str, List[str], None] = None) -> ndarray:
+        raise NotImplementedError()
 
     def vector_values(self, when: Union[Real, List[Real]], which: Union[str, List[str]]) -> ndarray:
         when_unique, when_unique_indexes = np.unique(when, return_inverse=True)
@@ -26,8 +27,8 @@ class Simulation:
 
         return result_matrix[when_unique_indexes, which_unique_indexes]
 
-    def matrix_sensitivities(self, when: Union[Real, List[Real]], which: Union[str, List[str], None]=None) -> ndarray:
-        raise NotImplementedError
+    def matrix_sensitivities(self, when: Union[Real, List[Real]], which: Union[str, List[str], None] = None) -> ndarray:
+        raise NotImplementedError()
 
     def vector_sensitivities(self, when: Union[Real, List[Real]], which: Union[str, List[str]]) -> ndarray:
         when_unique, when_unique_indexes = np.unique(when, return_inverse=True)
@@ -37,8 +38,8 @@ class Simulation:
 
         return result_matrix[when_unique_indexes, which_unique_indexes, :]
 
-    def matrix_curvatures(self, when: Union[Real, List[Real]], which: Union[str, List[str], None]=None) -> ndarray:
-        raise NotImplementedError
+    def matrix_curvatures(self, when: Union[Real, List[Real]], which: Union[str, List[str], None] = None) -> ndarray:
+        raise NotImplementedError()
 
     def vector_curvatures(self, when: Union[Real, List[Real]], which: Union[str, List[str]]) -> ndarray:
         when_unique, when_unique_indexes = np.unique(when, return_inverse=True)
@@ -56,15 +57,15 @@ class BioluciaSystemSimulation(Simulation):
         self.parameters = parameters
 
         self.solution = LazyIntegrableSolution(self.ode_system.x0, self.ode_system.f, self.ode_system.f_dx,
-                                               self.ode_system.discontinuities, self.ode_system.t_dose,
-                                               self.ode_system.d, self.ode_system.e, self.ode_system.e_dir,
-                                               self.ode_system.e_eff)
+                                               ListDiscontinuitySupplier(self.ode_system.discontinuities),
+                                               ListDoseSupplier(self.ode_system.t_dose), self.ode_system.d,
+                                               self.ode_system.e, self.ode_system.e_dir, self.ode_system.j)
         self.solution.integrate_to(final_time)
 
-        # TODO: the rest of the model features
         self.sensitivities = LazyIntegrableSolution(self.ode_system.x0_dk.flatten(), self.odes_dk, self.jacobian_dk,
-                                                    self.ode_system.discontinuities, [], [],
-                                                    [], np.empty((0,)), [])
+                                                    ListDiscontinuitySupplier(self.ode_system.discontinuities),
+                                                    LazyIntegrableSolutionDoseSupplier(self.solution),
+                                                    self.dose_effect_dk, [], np.empty((0,)), [])
 
     def matrix_values(self, when: Union[Real, List[Real]], which: Union[str, List[str]] = None) -> ndarray:
         which = self._observable_names if which is None else which
@@ -92,7 +93,7 @@ class BioluciaSystemSimulation(Simulation):
                     for which_i in which:
                         yield output_fun(which_i, when_i, states)
 
-            values = np.fromiter(values(), 'float', count=len(which)*len(when))
+            values = np.fromiter(values(), 'float', count=len(which) * len(when))
             return np.reshape(values, [len(when), len(which)])
 
     def odes_dk(self, t, x_dk) -> ndarray:
@@ -107,6 +108,41 @@ class BioluciaSystemSimulation(Simulation):
         x = self.solution(t)
 
         return sparse.kron(sparse.identity(nk), self.ode_system.f_dx(t, x), format='csc')
+
+    def dose_effect_dk(self, t, x_dk) -> ndarray:
+        nx = len(self.ode_system.x0)
+        nk = len(self.ode_system.k)
+
+        # In the rare case that a dose and event occur at the same time, apply event first
+        if t in self.solution.detection_times:
+            i_time = self.solution.detection_times.index(t)
+            i = self.solution.detection_indexes[i_time]
+            x_pre = self.solution.detection_pre_states[i_time]
+            x_post = self.solution.detection_post_states[i_time]
+
+            e_dk_pre = self.ode_system.e_dk[i](t, x_pre).reshape((1, -1))
+            e_dx_pre = self.ode_system.e_dx[i](t, x_pre).reshape((1, -1))
+            e_dt_pre = self.ode_system.e_dt[i](t, x_pre)
+            x_dt_pre = self.ode_system.f(t, x_pre).reshape((-1, 1))
+
+            t_dk = - (e_dk_pre + e_dx_pre @ x_dk) / (e_dt_pre + e_dx_pre @ x_dt_pre)
+
+            j_dk_pre = self.ode_system.j_dk[i](t, x_pre)
+            j_dx_pre = self.ode_system.j_dx[i](t, x_pre)
+            j_dt_pre = self.ode_system.j_dt[i](t, x_pre).reshape((-1, 1))
+
+            j_dk = j_dk_pre + j_dx_pre @ x_dk.reshape((-1, 1)) + j_dt_pre @ t_dk + (j_dx_pre @ x_dt_pre) * t_dk
+
+            x_dt_post = self.ode_system.f(t, x_post).reshape((-1, 1))
+
+            x_dk = (j_dk - x_dt_post * t_dk).flatten()
+
+        if t in self.solution.dose_times:
+            i_time = self.solution.dose_times.index(t)
+            x = self.solution.dose_states[i_time]
+            x_dk = (self.ode_system.d_dx(t, x) @ x_dk.reshape(nx, nk) + self.ode_system.d_dk(t, x)).flatten()
+
+        return x_dk
 
     def matrix_sensitivities(self, when: Union[Real, List[Real]], which: Union[str, List[str], None] = None) -> ndarray:
         which = self._observable_names if which is None else which
@@ -146,11 +182,13 @@ class BioluciaSystemSimulation(Simulation):
 
 
 # Multiple dispatch contraption for simulate
-def simulate(model: Model, experiments: Union[Experiment, List[Experiment]], **kwargs):
+def simulate(model: Model, experiments: Union[Experiment, List[Experiment]] = InitialValueExperiment(), **kwargs) -> \
+        Union[Simulation, List[Experiment]]:
     if isinstance(experiments, Experiment):
         return simulate.dispatcher(model, experiments, **kwargs)
     else:
         return [simulate.dispatcher(model, experiment, **kwargs) for experiment in experiments]
+
 
 simulate.dispatcher = Dispatcher('simulate')
 
@@ -158,15 +196,15 @@ simulate.dispatcher = Dispatcher('simulate')
 @simulate.dispatcher.register(Model, InitialValueExperiment)
 def simulate_analytic_initial(model: Model, experiment: InitialValueExperiment, *,
                               final_time: float = 0.0, parameters: List[str] = ()):
-    system = model.update(experiment.variant)
+    system = update(model, experiment.variant)
     return BioluciaSystemSimulation(system, final_time, parameters)
 
 
 @simulate.dispatcher.register(Model, SteadyStateExperiment)
 def simulate_analytic_steady_state(model: Model, experiment: SteadyStateExperiment, *,
                                    final_time: float = 0.0, parameters: List[str] = ()):
-    starter = model.update(experiment.starter)
-    system = model.update(experiment.variant)
+    starter = update(model, update(experiment.starter))
+    system = update(model, experiment.variant)
 
     # TODO: or something like this...
     starter = run_to_steady_state(starter)

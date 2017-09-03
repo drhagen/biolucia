@@ -2,6 +2,7 @@ from enum import IntEnum
 from collections import OrderedDict
 from typing import Tuple, Union, Dict, List, Callable
 
+from multipledispatch import Dispatcher
 from sympy import Expr, Piecewise, Symbol, lambdify, And, diff, Float
 import numpy as np
 from numpy import inf, nan
@@ -358,6 +359,9 @@ class Ode:
         else:
             return self.value.has_overlap(other.value)
 
+    def __add__(self, other):
+        return Ode(self.value + other.value, self.additive)
+
     def __eq__(self, other):
         return self.value == other.value
 
@@ -531,7 +535,7 @@ class Model:
 
         return Model(parts, events)
 
-    def add(self, *items: Union[List[Component], List[Event], List[str]]) -> 'Model':
+    def add(self, *items: Union[Component, Event, str]) -> 'Model':
         from biolucia.parser import collapse_components
 
         ready_parts = []
@@ -547,8 +551,7 @@ class Model:
 
         parsed_parts, parsed_events = collapse_components(parsed_components)
 
-        return self.copy(parts=self.parts + ready_parts + parsed_parts,
-                         events=self.events + ready_events + parsed_events)
+        return update(update(self, Model(ready_parts, ready_events)), Model(parsed_parts, parsed_events))
 
     def __getitem__(self, name: Union[Symbol, str]) -> Component:
         if isinstance(name, Symbol):
@@ -557,61 +560,6 @@ class Model:
         name_map = dict((part.name, part) for part in self.parts)
 
         return name_map[name]
-
-    def update(self, variant: 'Model') -> 'Model':
-        if not variant.parts and not variant.events:  # Don't update if there is nothing to update
-            return self
-
-        # Add to old parts if the new part is additive and they have compatible types (Rule/Constant and State)
-        # Otherwise replace the component with the component
-        old_parts = self.parts
-        new_parts = list(old_parts)
-        component_names = [part.name for part in old_parts]
-
-        for new_part in variant.parts:
-            if new_part.name in component_names:
-                index = component_names.index(new_part.name)
-                old_part = old_parts[index]
-
-                if ((isinstance(new_part, Rule) or isinstance(new_part, Constant)) and
-                        (isinstance(old_part, Rule) or isinstance(old_part, Constant))):
-                    if isinstance(new_part, Constant) and isinstance(old_part, Constant):
-                        # Only constants can be added together to make a new constant
-                        new_parts[index] = Constant(old_part.name, old_part.value + new_part.value, old_part.additive)
-                    else:
-                        combined_expr = old_part.value + new_part.value
-                        new_parts[index] = Rule(old_part.name, combined_expr, old_part.additive)
-                elif isinstance(new_part, State) and isinstance(old_part, State):
-                    if new_part.initial is None:
-                        new_initial = old_part.initial
-                    elif new_part.initial.additive:
-                        new_initial = Initial(old_part.initial.value + new_part.initial.value,
-                                              old_part.initial.additive)
-                    else:
-                        new_initial = new_part.initial
-
-                    if new_part.ode is None:
-                        new_ode = old_part.ode
-                    elif new_part.ode.additive:
-                        new_ode = Ode(old_part.ode.value + new_part.ode.value,
-                                      old_part.initial.additive)
-                    else:
-                        new_ode = new_part.ode
-
-                    new_doses = old_part.doses + new_part.doses
-
-                    new_parts[index] = State(old_part.name, new_initial, new_doses, new_ode)
-                else:
-                    raise ValueError(f'Component {new_part.name} has type {type(old_part)}'
-                                     f' and cannot be added with type {type(new_part)}')
-
-            else:
-                new_parts.append(new_part)
-
-        # Events are simply concatenated
-        new_events = self.events + variant.events
-
-        return Model(new_parts, new_events)
 
     def default_parameters(self) -> Dict[str, float]:
         parameters: List[Tuple[str, float]] = []
@@ -712,11 +660,11 @@ class Model:
         for event_object in event_objects:
             trigger = event_object.trigger
             direction = event_object.direction
-            effects = state_names.copy()
+            effects = list(map(Symbol, state_names))
             for effect in event_object.effects:
                 # TODO (drhagen): handle rare case of duplicate targets with additive effect
                 i_target = state_names.index(str(effect.target))
-                effects[i_target] = effect.value
+                effects[i_target] = effect.value.to_sympy()
             events.append((trigger, direction, effects))
 
         # Build output functions
@@ -741,3 +689,67 @@ class Model:
 
     def observable_names(self) -> List[str]:
         return [part.name for part in self.parts]
+
+
+# Multiple dispatch contraption for update
+def update(model: Model, variant: Model):
+    return update.dispatcher(model, variant)
+
+update.dispatcher = Dispatcher('update')
+
+
+@update.dispatcher.register(Model, Model)
+def update_model_model(model: Model, variant: Model):
+    if not variant.parts and not variant.events:  # Don't update if there is nothing to update
+        return model
+
+    # Add to old parts if the new part is additive and they have compatible types (Rule/Constant and State)
+    # Otherwise replace the component with the component
+    old_parts = model.parts
+    new_parts = list(old_parts)
+    component_names = [part.name for part in old_parts]
+
+    for new_part in variant.parts:
+        if new_part.name in component_names:
+            index = component_names.index(new_part.name)
+            old_part = old_parts[index]
+
+            if ((isinstance(new_part, Rule) or isinstance(new_part, Constant)) and
+                    (isinstance(old_part, Rule) or isinstance(old_part, Constant))):
+                if isinstance(new_part, Constant) and isinstance(old_part, Constant):
+                    # Only constants can be added together to make a new constant
+                    new_parts[index] = Constant(old_part.name, old_part.value + new_part.value, old_part.additive)
+                else:
+                    combined_expr = old_part.value + new_part.value
+                    new_parts[index] = Rule(old_part.name, combined_expr, old_part.additive)
+            elif isinstance(new_part, State) and isinstance(old_part, State):
+                if new_part.initial is None:
+                    new_initial = old_part.initial
+                elif new_part.initial.additive:
+                    new_initial = Initial(old_part.initial.value + new_part.initial.value,
+                                          old_part.initial.additive)
+                else:
+                    new_initial = new_part.initial
+
+                if new_part.ode is None:
+                    new_ode = old_part.ode
+                elif new_part.ode.additive:
+                    new_ode = Ode(old_part.ode.value + new_part.ode.value,
+                                  old_part.initial.additive)
+                else:
+                    new_ode = new_part.ode
+
+                new_doses = old_part.doses + new_part.doses
+
+                new_parts[index] = State(old_part.name, new_initial, new_doses, new_ode)
+            else:
+                raise ValueError(f'Component {new_part.name} has type {type(old_part)}'
+                                 f' and cannot be added with type {type(new_part)}')
+
+        else:
+            new_parts.append(new_part)
+
+    # Events are simply concatenated
+    new_events = model.events + variant.events
+
+    return Model(new_parts, new_events)

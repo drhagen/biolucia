@@ -127,7 +127,7 @@ class ModelParsers(TextParsers, whitespace=r'[ \t]*'):
             additive = False
         return name, Ode(AnalyticSegment(first, last, expr), additive)
 
-    ode = name & opt(time_range) << "'" & lit('=', '+=') & expression > make_ode
+    ode = name << "'" & opt(time_range) & lit('=', '+=') & expression > make_ode
 
     def make_dose(x):
         name, time, op, value = x
@@ -248,10 +248,18 @@ def collapse_components(components):
             raise ValueError(f'Part {name} is mentioned as both a rule and a state')
         elif is_rule:
             # This is a rule
+            if non_additive_rule is None:
+                non_additive_rule = Rule(name, 0, additive=False)
+
             new_rule = reduce(lambda first, second: first + second, additive_rules, non_additive_rule)
             parts.append(new_rule)
         elif is_state:
             # This is a state
+            if non_additive_initial is None:
+                non_additive_initial = Initial(0, additive=True)
+            if non_additive_ode is None:
+                non_additive_ode = Ode(0, additive=True)
+
             new_initial = reduce(lambda first, second: first + second, additive_initials, non_additive_initial)
             new_ode = reduce(lambda first, second: first + second, additive_odes, non_additive_ode)
             new_ode = State(name, new_initial, doses, new_ode)

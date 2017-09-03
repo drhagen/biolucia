@@ -25,5 +25,13 @@ def equilibrium_dose_variant():
 def dose_step():
     m = Model()
     m = m.add('A* = 0', "A' = 0", 'A(1) = 2', 'A(2) += 1')
+    m = m.add('k0 = 4', 'k1 = 3', 'k2 = 5', 'B* = 0', "B' = k0", 'B(1) = k1', 'B(3) += k2')
+
+    return m
+
+
+def bouncing():
+    m = Model()
+    m = m.add('x* = 50', 'v* = 0', "x' = v", "v' = -1", '@(x < 0) v = -v')
 
     return m

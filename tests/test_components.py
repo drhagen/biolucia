@@ -137,3 +137,11 @@ class ParameterUpdatingTestCase(unittest.TestCase):
 
         self.assertEqual(m_new['B0'], Constant('B0', 7))
         self.assertEqual(m_new['kf'], Constant('kf', 1.2))
+
+
+class AddingComponentsTestCase(unittest.TestCase):
+    def test_adding_dose_to_existing_model(self):
+        m1 = equilibrium_model().add('A(5) += 5')
+        m2 = m1.add('A(5) += 5')
+
+        self.assertEqual(len(m1.parts), len(m2.parts))

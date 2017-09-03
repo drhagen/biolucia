@@ -52,7 +52,7 @@ class ParserTestCase(unittest.TestCase):
         k = ModelParsers.rule.parse("k(1 < t < 10) = z*2").or_die()
         self.assertEqual(k, ('k', Rule('k', AnalyticSegment(1, 10, 'z*2'))))
 
-        l = ModelParsers.ode.parse("l(1 < t < 10)' = cos(t)").or_die()
+        l = ModelParsers.ode.parse("l'(1 < t < 10) = cos(t)").or_die()
         self.assertEqual(l, ('l', Ode(AnalyticSegment(1, 10, 'cos(t)'))))
 
     def test_combined_components(self):
