@@ -15,7 +15,7 @@ class ModelParsers(TextParsers, whitespace=r'[ \t]*'):
 
     def make_function(x):
         func_name, arguments = x
-        if func_name in sy.__dict__:
+        if func_name in sy.functions.__dict__:
             func_handle = sy.__dict__[func_name]
         else:
             raise ValueError(f'Function "{func_name}" not found. Only functions in sympy.* may be used.')
@@ -25,7 +25,7 @@ class ModelParsers(TextParsers, whitespace=r'[ \t]*'):
 
     factor = number | function | symbol | '(' >> expression << ')'
 
-    def make_term(x):
+    def make_exponent(x):
         x = list(reversed(x))  # Exponentiation is right associative so reverse the list
         value = x[0]
         rest = x[1:]
@@ -33,7 +33,7 @@ class ModelParsers(TextParsers, whitespace=r'[ \t]*'):
             value = sy.Pow(item, value)
         return value
 
-    exponent = rep1sep(factor, '^') > make_term
+    exponent = rep1sep(factor, '^') > make_exponent
 
     def make_term(x):
         first, rest = x
